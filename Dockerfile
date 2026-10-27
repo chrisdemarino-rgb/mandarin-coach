@@ -1,9 +1,10 @@
 # Mandarin coach: one Node 20 service serving the static frontend (public/) and the API (server/).
-# Primary host: Railway (builds this file; see README-DEPLOY.md). Also runs anywhere Docker runs:
+# Primary host: Render (Docker web service + persistent disk at /data; see render.yaml, README-DEPLOY.md).
+# Also runs anywhere Docker runs:
 #   docker build -t mandarin-coach .
 #   docker run -p 8080:8080 -v coach-data:/data --env-file .env mandarin-coach
-# Railway injects $PORT at run time (the app reads it; default 8080). Do not hard-code PORT here.
-# Note: Railway rejects the Dockerfile VOLUME instruction; the persistent disk is a Railway volume mounted at /data.
+# Render injects $PORT (default 10000); the app reads it (default 8080). Do not hard-code PORT here.
+# The entrypoint fixes ownership of the mounted disk (often root-owned) and then drops to the "node" user.
 
 FROM node:20-bookworm-slim AS deps
 WORKDIR /app

@@ -1,0 +1,19 @@
+{
+  "name": "mandarin-coach",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Private Mandarin speaking coach: Express API + static frontend",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node --test server/test/*.test.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.5.0",
+    "express": "^4.21.0",
+    "multer": "^1.4.5-lts.1",
+    "pinyin-pro": "^3.26.0"
+  }
+}

@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#0a5cff">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Coach">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+  <title>Mandarin Coach</title>
+</head>
+<body data-view="script" data-state="idle" data-auth="unknown">
+  <!-- ========== LOGIN ========== -->
+  <section id="view-login" class="login" aria-label="Sign in">
+    <form id="loginForm" class="card login-card" autocomplete="off">
+      <h1 class="brand">Mandarin Coach</h1>
+      <p class="muted">Enter your passcode to start practising.</p>
+      <label class="label" for="passcode">Passcode</label>
+      <input id="passcode" class="input" type="password" name="passcode" autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false" required>
+      <p id="loginError" class="warn" role="alert" hidden></p>
+      <button id="btnLogin" class="btn primary big" type="submit">Sign in</button>
+    </form>
+  </section>
+
+  <header class="topbar">
+    <h1 class="brand">Mandarin Coach</h1>
+    <nav class="tabs" aria-label="Screens">
+      <button class="tab" data-view="script" type="button">Script</button>
+      <button class="tab" data-view="practice" type="button">Practice</button>
+      <button class="tab" data-view="saved" type="button">Saved</button>
+      <button class="tab" data-view="settings" type="button">Settings</button>
+    </nav>
+  </header>
+
+  <div id="mockBanner" class="mock-banner" role="status" hidden>
+    <strong>MOCK</strong> <span id="mockBannerText">Simulated assessment: scores and tone marks are not real.</span>
+  </div>
+
+  <main id="layout">
+    <!-- ========== SCRIPT ========== -->
+    <section id="view-script" class="view" aria-label="Script">
+      <div class="card">
+        <label class="label" for="scriptInput">Your Chinese script</label>
+        <textarea id="scriptInput" rows="9" lang="zh-CN" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off"
+          placeholder="Paste your full script here (1000+ characters). Use [停顿] for a pause and [强调] before words to stress."></textarea>
+        <div class="row between">
+          <span id="charCount" class="count" aria-live="polite">0 characters</span>
+          <span id="charWarn" class="warn" hidden>Under 1000 characters. You can still practise.</span>
+        </div>
+        <div class="row gap wrap">
+          <button id="btnSample" class="btn" type="button">Load sample script</button>
+          <label class="btn file-btn" for="fileInput">Open .txt file</label>
+          <input id="fileInput" class="sr-only" type="file" accept=".txt,text/plain">
+          <button id="btnClear" class="btn ghost" type="button">Clear</button>
+        </div>
+        <p class="hint">Stage directions in [ ] 【 】 ［ ］ are shown as muted cues. They are never spoken or assessed ([停顿] adds a real pause in the coach voice). Each practice piece is at most 100 characters, so long sentences are split at commas automatically.</p>
+      </div>
+
+      <div class="card">
+        <div class="row between wrap gap">
+          <h2 class="h2">Chunks <span id="chunkSummary" class="muted"></span></h2>
+        </div>
+        <label class="label" for="chunkModeScript">Chunk size</label>
+        <select id="chunkModeScript" class="select js-chunk-mode"></select>
+        <ol id="chunkList" class="chunk-list" aria-label="Chunks"></ol>
+        <button id="btnGoPractice" class="btn primary" type="button">Go to practice</button>
+      </div>
+    </section>
+
+    <!-- ========== PRACTICE ========== -->
+    <section id="view-practice" class="view" aria-label="Practice">
+      <div class="practice-scroll" id="practiceScroll">
+        <div class="progress-wrap">
+          <div class="row between"><span id="progressLabel" class="muted">Chunk 0 of 0</span><span id="progressDone" class="muted"></span></div>
+          <div id="progressBar" class="bar" role="progressbar" aria-label="Chunks completed" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i></i></div>
+        </div>
+
+        <div class="selects">
+          <div>
+            <label class="label" for="practiceMode">Practice mode</label>
+            <select id="practiceMode" class="select">
+              <option value="listen_repeat">Listen and repeat</option>
+              <option value="fading_cues">Fading cues</option>
+            </select>
+          </div>
+          <div>
+            <label class="label" for="chunkModePractice">Chunk size</label>
+            <select id="chunkModePractice" class="select js-chunk-mode"></select>
+          </div>
+        </div>
+
+        <div id="emptyScript" class="card center" hidden>
+          <p>No script yet. Paste one (or load the sample) first.</p>
+          <button id="btnToScript" class="btn primary" type="button">Open script</button>
+        </div>
+
+        <div id="cueCard" class="card cue-card">
+          <div class="cue-meta">
+            <div id="fadeIndicator" class="fade-ind" hidden aria-label="Cue level">
+              <span class="fade-dots" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+              <span id="fadeText"></span>
+            </div>
+            <div class="row gap">
+              <span id="pieceLabel" class="muted"></span>
+              <button id="btnPeek" class="chip" type="button" hidden aria-pressed="false">Peek</button>
+              <button id="btnHear" class="chip" type="button" hidden>&#128266; Hear it</button>
+            </div>
+          </div>
+          <p id="cueText" class="cue-text" lang="zh-CN">Tap Start to begin.</p>
+          <p id="cueNote" class="muted" hidden></p>
+          <p id="notice" class="notice" role="status" hidden></p>
+        </div>
+
+        <div id="statusPanel" class="card status" data-kind="idle">
+          <div class="st st-idle"><span class="st-title">Ready</span><span class="muted" id="idleHint">Tap Start. You'll hear the line, then it's your turn to repeat.</span></div>
+          <div class="st st-prompting" hidden><span class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span class="st-title">Coach is speaking</span><span class="muted">Listen, then repeat. Recording starts automatically.</span></div>
+          <div class="st st-listening" hidden>
+            <div class="row gap center-v"><span class="rec-dot" aria-hidden="true"></span><span class="st-title rec">Recording</span><span id="recTimer" class="timer" aria-hidden="true">0:00</span></div>
+            <span class="muted">Speak now. Tap Done when finished.</span>
+          </div>
+          <div class="st st-processing" hidden><span class="spinner" aria-hidden="true"></span><span class="st-title" id="procTitle">Assessing your speech…</span><span class="muted" id="procHint"></span></div>
+          <div class="st st-playback" hidden>
+            <span class="st-title" id="playTitle">Playing your recording</span>
+            <div class="bar playbar" role="progressbar" aria-label="Playback progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="playFill"></i></div>
+          </div>
+          <div class="st st-paused" hidden><span class="st-title">Paused</span><span class="muted" id="pausedHint">Tap Resume when you're ready. The microphone is released while paused.</span></div>
+        </div>
+
+        <div id="errorPanel" class="card error" role="alert" hidden>
+          <p id="errorText"></p>
+          <div class="row gap wrap">
+            <button id="btnErrRetry" class="btn primary" type="button">Try again</button>
+            <button id="btnErrSkip" class="btn" type="button">Skip this piece</button>
+          </div>
+        </div>
+
+        <div id="resultPanel" class="card result" hidden>
+          <div class="score-row">
+            <div id="verdictIcon" class="score-badge" aria-hidden="true">✓</div>
+            <div>
+              <div id="verdict" class="score-label">Result</div>
+              <div id="verdictNote" class="muted"></div>
+            </div>
+          </div>
+          <p class="legend muted">Tap characters to select, then save as a word. <span class="lg lg-bad">tone to review</span> <span class="lg lg-unsure">not sure</span></p>
+          <div id="resultChars" class="rchars" lang="zh-CN"></div>
+          <div id="saveBar" class="savebar" hidden>
+            <span id="saveSel" class="sel-text" lang="zh-CN"></span>
+            <button id="btnSaveSel" class="btn primary small" type="button">Save word</button>
+            <button id="btnClearSel" class="btn ghost small" type="button">Clear</button>
+          </div>
+          <div id="transcriptBox" class="transcript" hidden></div>
+          <div id="feedbackWrap" hidden>
+            <button id="btnFeedback" class="btn ghost fb-toggle" type="button" aria-expanded="true" aria-controls="feedbackBody">Written feedback</button>
+            <div id="feedbackBody" class="fb-body" lang="zh-CN"></div>
+          </div>
+          <div class="row gap wrap">
+            <button id="btnPlayback" class="btn" type="button">&#9654; Play my recording</button>
+            <button id="btnHearCoach" class="btn" type="button">&#128266; Hear coach again</button>
+          </div>
+          <p id="engineTag" class="engine-tag muted"></p>
+        </div>
+
+        <div id="summaryPanel" class="card summary" hidden></div>
+      </div>
+
+      <div id="controlbar" class="controlbar">
+        <button id="btnPrimary" class="btn primary big" type="button">Start</button>
+        <div class="ctl-row">
+          <button id="btnPause" class="btn" type="button">Pause</button>
+          <button id="btnRetry" class="btn" type="button">Retry</button>
+          <button id="btnSkip" class="btn" type="button">Skip</button>
+          <button id="btnFinish" class="btn danger" type="button">Finish</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== SAVED ========== -->
+    <section id="view-saved" class="view" aria-label="Saved words">
+      <div class="card">
+        <div class="row between wrap gap"><h2 class="h2">Saved words <span id="savedCount" class="muted"></span></h2></div>
+        <div class="row gap wrap">
+          <button id="btnCopyWords" class="btn" type="button">Copy list</button>
+          <button id="btnExportWords" class="btn" type="button">Export CSV</button>
+          <button id="btnRefreshWords" class="btn ghost" type="button">Refresh</button>
+        </div>
+        <p id="savedError" class="warn" hidden></p>
+        <ul id="savedList" class="saved-list"></ul>
+        <p id="savedEmpty" class="muted" hidden>Nothing saved yet. In a result, tap characters and choose Save word.</p>
+      </div>
+    </section>
+
+    <!-- ========== SETTINGS ========== -->
+    <section id="view-settings" class="view" aria-label="Settings">
+      <form id="settingsForm" class="card" autocomplete="off" onsubmit="return false">
+        <h2 class="h2">Settings</h2>
+        <label class="label" for="setAssess">Assessment mode</label>
+        <select id="setAssess" class="select">
+          <option value="close">Close: repeat the line (assessed against the script)</option>
+          <option value="retell">Retell: say it in your own words (assessed on what you said)</option>
+        </select>
+        <label class="label" for="setRate">Coach speech rate: <output id="setRateOut">1.00</output>×</label>
+        <input id="setRate" class="range" type="range" min="0.6" max="1.2" step="0.05">
+        <label class="label" for="setVoice">Coach voice (optional)</label>
+        <input id="setVoice" class="input" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Server default" maxlength="64">
+        <label class="label" for="setChunkMode">Default chunk size</label>
+        <select id="setChunkMode" class="select js-chunk-mode"></select>
+        <label class="switch"><input id="setPinyin" type="checkbox"><span>Show pinyin under characters in results</span></label>
+        <label class="switch"><input id="setFeedback" type="checkbox"><span>Show written feedback panel</span></label>
+        <label class="switch"><input id="setAutoCoach" type="checkbox"><span>Play coach audio automatically</span></label>
+        <div class="row gap wrap">
+          <button id="btnTestConn" class="btn" type="button">Check server</button>
+          <button id="btnLogout" class="btn ghost" type="button">Sign out</button>
+        </div>
+        <p id="connResult" class="muted" role="status"></p>
+        <p id="prefsError" class="warn" hidden></p>
+      </form>
+    </section>
+  </main>
+
+  <div id="live" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

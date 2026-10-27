@@ -1,0 +1,12 @@
+node_modules
+public-dev-notes
+data
+.env
+.env.*
+!.env.example
+server/test-results
+*.log
+.git
+**/.env
+**/.env.*
+**/data

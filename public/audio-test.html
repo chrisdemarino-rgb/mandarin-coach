@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>iPhone audio test</title>
+<style>
+  :root { font-family: -apple-system, system-ui, sans-serif; }
+  body { margin: 0; padding: 12px 12px 60px; background: #f4f4f6; color: #111; }
+  h1 { font-size: 20px; margin: 4px 0 2px; }
+  h2 { font-size: 16px; margin: 0 0 8px; }
+  p.small, .small { font-size: 13px; color: #555; margin: 4px 0 8px; }
+  section { background: #fff; border-radius: 14px; padding: 12px; margin: 12px 0; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  button { display: block; width: 100%; font-size: 18px; padding: 16px; margin: 8px 0; border: 0; border-radius: 12px; background: #0a64ff; color: #fff; font-weight: 600; }
+  button.alt { background: #e3e8f0; color: #111; }
+  button.danger { background: #d92d20; }
+  button:disabled { opacity: .4; }
+  .row { display: flex; gap: 8px; } .row button { flex: 1; font-size: 16px; padding: 14px 6px; }
+  #state { font-weight: 700; padding: 8px 10px; border-radius: 8px; background: #eef; display: inline-block; }
+  select { font-size: 16px; padding: 8px; width: 100%; margin: 4px 0; }
+  label { font-size: 14px; display: block; margin: 6px 0; }
+  #log { width: 100%; box-sizing: border-box; height: 260px; font: 11px/1.35 ui-monospace, Menlo, monospace; border: 1px solid #ccd; border-radius: 8px; padding: 6px; background: #0f1115; color: #cfe; }
+  audio { width: 100%; margin-top: 6px; }
+  .pill { font-size: 13px; padding: 2px 8px; border-radius: 10px; background: #e3e8f0; }
+</style>
+</head>
+<body>
+<h1>iPhone audio test</h1>
+<p class="small">Use headphones. Turn the ring/silent switch to <b>ring</b> (no orange) for the first run. No secrets on this page.</p>
+<div id="last" style="position:sticky;top:0;z-index:5;background:#fff8d6;border:1px solid #e6d88a;border-radius:8px;padding:8px;margin:6px 0;font-size:14px">Last event: page loaded, nothing tapped yet.</div>
+<script>
+(function () {
+  var last = document.getElementById('last');
+  function show(m) { if (last) { last.textContent = m; last.style.background = '#ffd6d6'; } }
+  window.addEventListener('error', function (e) { show('JS ERROR: ' + (e.message || 'unknown') + (e.lineno ? ' (line ' + e.lineno + ')' : '')); });
+  window.addEventListener('unhandledrejection', function (e) { show('JS ERROR (promise): ' + (e.reason && e.reason.message || e.reason)); });
+  document.addEventListener('click', function (e) {
+    if (e.target && e.target.tagName === 'BUTTON' && !window.__audioTestReady) show('Button tapped, but the page script is not running yet. Wait 3 seconds and try again. If this stays, copy this message to Chris\'s assistant.');
+  }, true);
+  import('./js/audio.js?v=6').then(function () {}, function (err) { show('audio.js FAILED to load: ' + (err && err.message || err)); });
+  setTimeout(function () { if (!window.__audioTestReady) show('Page script did not start after 3 s (see any error above).'); }, 3000);
+})();
+</script>
+<div>State: <span id="state">idle</span> &nbsp; <span class="pill" id="sess">audioSession: ?</span></div>
+
+<section>
+  <h2>0. Start here</h2>
+  <button id="btnUnlock">Tap first: unlock audio + show device info</button>
+  <label>Session strategy
+    <select id="strategy">
+      <option value="before">A: set play-and-record BEFORE mic opens</option>
+      <option value="kick">B: auto, open mic, THEN play-and-record</option>
+    </select>
+  </label>
+  <label><input type="checkbox" id="keepOpen" checked> Keep mic open between takes (app default)</label>
+  <label><input type="checkbox" id="echo" checked> echoCancellation + noiseSuppression on</label>
+</section>
+
+<section>
+  <h2>1. Playback</h2>
+  <button id="btnTone">Play test tone (&lt;audio&gt; element)</button>
+  <button id="btnTts" class="alt">Speak Chinese (speechSynthesis zh-CN)</button>
+  <div class="small" id="voices"></div>
+</section>
+
+<section>
+  <h2>2. Record 5 seconds</h2>
+  <p class="small">Say something in Chinese. Mic opens, records 5 s, then plays it back.</p>
+  <button id="btnRec">Record 5 s</button>
+  <button id="btnPlayRec" class="alt" disabled>Play my recording</button>
+  <button id="btnRelease" class="alt">Release mic + reset to playback</button>
+  <div class="small" id="recInfo">No recording yet.</div>
+</section>
+
+<section>
+  <h2>3. Full coach cycle</h2>
+  <p class="small">Plays tone, waits for it to end, records 5 s, plays tone again. Answer the questions below after each stage.</p>
+  <button id="btnCycle">Run full cycle</button>
+</section>
+
+<section>
+  <h2>4. What did you hear?</h2>
+  <p class="small">Tap after each test. Volume compared with the tone BEFORE recording:</p>
+  <div class="row"><button class="alt" data-q="volume" data-a="louder">Louder</button><button class="alt" data-q="volume" data-a="same">Same</button><button class="alt" data-q="volume" data-a="quieter">Quieter</button></div>
+  <p class="small">Sound came from:</p>
+  <div class="row"><button class="alt" data-q="route" data-a="headphones">Headphones</button><button class="alt" data-q="route" data-a="speaker">Speaker</button><button class="alt" data-q="route" data-a="earpiece">Earpiece</button></div>
+  <p class="small">Sound quality:</p>
+  <div class="row"><button class="alt" data-q="quality" data-a="normal">Normal</button><button class="alt" data-q="quality" data-a="thin/tinny">Thin</button><button class="alt" data-q="quality" data-a="none">Silent</button></div>
+</section>
+
+<section>
+  <h2>5. Log</h2>
+  <textarea id="log" readonly></textarea>
+  <button id="btnCopy">Copy log</button>
+  <button id="btnClear" class="alt">Clear log</button>
+</section>
+
+<script type="module">
+import * as A from './js/audio.js?v=6';
+window.__audioTestReady = true;
+
+const $ = id => document.getElementById(id);
+const logEl = $('log');
+const t0 = Date.now();
+function L(msg) { const lastEl = $('last'); if (lastEl) lastEl.textContent = 'Last event: ' + msg.slice(0, 200); const s = `[${((Date.now() - t0) / 1000).toFixed(2)}] ${msg}`; logEl.value += s + '\n'; try { fetch('/log', { method: 'POST', body: s, keepalive: true }).catch(function () {}); } catch (e) {} logEl.scrollTop = logEl.scrollHeight; }
+let lastRec = null;
+let phase = '-';
+
+A.on('log', L);
+A.on('error', e => L('ERROR ' + (e && e.message || e)));
+A.on('state', s => { $('state').textContent = s; refreshSession(); });
+A.on('interrupted', i => L('interrupted=' + i));
+function refreshSession() { $('sess').textContent = 'audioSession: ' + (A.getSessionType() ?? 'n/a'); }
+
+function applyOptions() {
+  A.init({ keepMicOpen: $('keepOpen').checked, sessionStrategy: $('strategy').value,
+    echoCancellation: $('echo').checked, noiseSuppression: $('echo').checked });
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+L('page loaded ' + new Date().toISOString() + ' - script running OK');
+try { applyOptions(); } catch (e) { L('applyOptions failed: ' + e.message); }
+$('keepOpen').onchange = $('strategy').onchange = $('echo').onchange = () => { applyOptions(); L(`options: strategy=${$('strategy').value} keepOpen=${$('keepOpen').checked} echo/ns=${$('echo').checked}`); };
+
+$('btnUnlock').onclick = async () => {
+  L('Unlock button tapped...');
+  try { applyOptions(); } catch (e) { L('applyOptions failed: ' + e.message); }
+  const ok = await Promise.race([A.unlock(), new Promise(r => setTimeout(() => { L('unlock() took over 4 s, continuing'); r(false); }, 4000))]);
+  L('unlock -> ' + ok);
+  L('DIAG ' + JSON.stringify(A.diagnostics()));
+  try { const AC = window.AudioContext || window.webkitAudioContext; const c = new AC(); L('AudioContext.sampleRate=' + c.sampleRate); c.close(); } catch (e) { L('AudioContext n/a'); }
+  loadVoices();
+  refreshSession();
+};
+
+$('btnTone').onclick = async () => {
+  applyOptions(); await A.unlock(); phase = 'tone';
+  L('--- tone via <audio> start (session=' + A.getSessionType() + ')');
+  try { await A.play(A.makeToneWav({ seconds: 2 })); L('tone ended'); } catch (e) { L('tone failed: ' + e.message); }
+};
+
+function zhVoice() { return speechSynthesis.getVoices().find(v => /^zh[-_]CN/i.test(v.lang)) || speechSynthesis.getVoices().find(v => /^zh/i.test(v.lang)); }
+function loadVoices() {
+  if (!('speechSynthesis' in window)) { $('voices').textContent = 'speechSynthesis NOT available'; return; }
+  const vs = speechSynthesis.getVoices().filter(v => /^zh/i.test(v.lang));
+  $('voices').textContent = vs.length ? 'zh voices: ' + vs.map(v => `${v.name} (${v.lang})`).join(', ') : 'No zh voices listed (yet). Tap again.';
+  L('zh voices: ' + (vs.map(v => `${v.name}/${v.lang}`).join('; ') || 'none'));
+}
+if ('speechSynthesis' in window) speechSynthesis.onvoiceschanged = loadVoices;
+
+$('btnTts').onclick = async () => {
+  applyOptions(); await A.unlock(); phase = 'tts';
+  if (!('speechSynthesis' in window)) return L('speechSynthesis missing');
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance('你好，今天我们练习说普通话。');
+  u.lang = 'zh-CN'; const v = zhVoice(); if (v) u.voice = v; u.rate = 0.9;
+  L(`--- speak zh-CN voice=${v ? v.name + '/' + v.lang : '(default)'}`);
+  const t = Date.now();
+  await new Promise(res => {
+    u.onstart = () => L('tts start');
+    u.onend = () => { L(`tts end after ${Date.now() - t} ms`); res(); };
+    u.onerror = e => { L('tts error ' + e.error); res(); };
+    speechSynthesis.speak(u);
+    setTimeout(() => { if (speechSynthesis.speaking) return; if (Date.now() - t > 4000) { L('tts: nothing spoke after 4 s (silent switch? no zh voice?)'); res(); } }, 4200);
+  });
+};
+
+async function record5() {
+  applyOptions(); await A.unlock();
+  const info = await A.startRecording();
+  L(`recording started: mime=${info.mime} session=${info.sessionType} track="${info.track && info.track.label}"`);
+  await sleep(5000);
+  const r = await A.stopRecording();
+  lastRec = r;
+  const a = await A.analyzeBlob(r.blob).catch(e => ({ error: e.message }));
+  L(`take: ${r.durationMs} ms, ${r.blob.size} bytes, ${r.mime}, valid=${r.valid}${r.reason ? ' (' + r.reason + ')' : ''}`);
+  L('decoded: ' + JSON.stringify(a));
+  $('recInfo').textContent = `mime ${r.mime} | ${(r.durationMs / 1000).toFixed(1)} s | ${(r.blob.size / 1024).toFixed(0)} KB | ` + (a.error ? 'decode error ' + a.error : `${a.sampleRate} Hz, ${a.channels} ch, peak ${a.peak}, rms ${a.rms}`);
+  if (!a.error && a.peak < 0.01) L('WARNING: recording is (almost) silent. Mic permission or routing problem.');
+  $('btnPlayRec').disabled = false;
+  A.markDone();
+  return r;
+}
+$('btnRec').onclick = async () => {
+  phase = 'record'; $('btnRec').disabled = true;
+  try { L('--- record 5 s'); await record5(); await playLast(); } catch (e) { L('record failed: ' + e.name + ': ' + e.message); }
+  $('btnRec').disabled = false;
+};
+async function playLast() {
+  if (!lastRec) return;
+  L('--- playback of recording (session=' + A.getSessionType() + ')');
+  try { await A.play(lastRec.blob); L('recording playback ended'); } catch (e) { L('playback failed: ' + e.message); }
+}
+$('btnPlayRec').onclick = playLast;
+
+$('btnRelease').onclick = () => { A.releaseMic(); L('released; session=' + A.getSessionType()); };
+
+$('btnCycle').onclick = async () => {
+  $('btnCycle').disabled = true; phase = 'cycle';
+  try {
+    applyOptions(); await A.unlock();
+    L('=== CYCLE: tone BEFORE recording (note its volume)');
+    await A.play(A.makeToneWav({ seconds: 2 }));
+    L('=== CYCLE: tone ended; recording now (speak!)');
+    await record5();
+    L('=== CYCLE: tone AFTER recording (same tone: louder/same/quieter? which route?)');
+    if (!$('keepOpen').checked) L('(mic was released after the take)');
+    await A.play(A.makeToneWav({ seconds: 2 }));
+    L('=== CYCLE: done. Now tap the answers in section 4.');
+  } catch (e) { L('cycle failed: ' + e.name + ': ' + e.message); }
+  $('btnCycle').disabled = false;
+};
+
+document.querySelectorAll('button[data-q]').forEach(b => b.onclick = () => {
+  L(`SELF-REPORT ${b.dataset.q}=${b.dataset.a} (after phase=${phase}, session=${A.getSessionType()}, strategy=${$('strategy').value}, keepOpen=${$('keepOpen').checked})`);
+  b.style.outline = '3px solid #0a64ff'; setTimeout(() => b.style.outline = '', 600);
+});
+
+$('btnCopy').onclick = async () => {
+  const text = logEl.value;
+  try { await navigator.clipboard.writeText(text); L('copied to clipboard'); }
+  catch (e) { logEl.removeAttribute('readonly'); logEl.focus(); logEl.select(); logEl.setSelectionRange(0, 999999); document.execCommand('copy'); logEl.setAttribute('readonly', ''); L('copied (fallback)'); }
+};
+$('btnClear').onclick = () => { logEl.value = ''; };
+window.addEventListener('error', e => L('window error: ' + e.message));
+window.addEventListener('unhandledrejection', e => L('unhandled: ' + (e.reason && e.reason.message || e.reason)));
+</script>
+</body>
+</html>

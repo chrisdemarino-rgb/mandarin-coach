@@ -1,0 +1,20 @@
+{
+  "_about": "Ground-truth labels for the 8 real clips (ONE speaker, Chris). Basis = what Chris was instructed to say (NEEDED-RECORDINGS.md) plus whether the engine's 'heard' tone equals the instructed deliberate tone. The audio was NOT re-listened to by a native speaker, so labels are instruction-based, not verified by ear.",
+  "01-nihao-correct":            { "intent": "你好 normal", "correct": true, "flags": {} },
+  "02-xiexie-correct":           { "intent": "谢谢 normal (xiè xie)", "correct": true,
+    "flags": { "tone:1": { "label": "FP", "basis": "Instructed normal; engine heard 3rd tone on 2nd 谢 (expected 4). Caveat: the 2nd syllable of 谢谢 is conventionally neutral, so the engine's expected tone 4 is itself questionable; not verified by ear." } } },
+  "03-xiexie-wrong-tone":        { "intent": "谢谢 with 2nd 谢 rising (xiè xié)", "correct": false,
+    "flags": { "tone:1": { "label": "TP", "basis": "Instructed rising tone on 2nd 谢; engine heard tone 2 = exactly the instructed tone." } } },
+  "04-xihuan-zhongwen-correct":  { "intent": "我喜欢学中文 normal", "correct": true,
+    "flags": { "tone:2": { "label": "FP", "basis": "Instructed normal; no deliberate change on 欢. Same flag (1->2, score 75.7) also appears in clip 05, so it may be a consistent speaker habit or an engine bias; undetermined without listening." } } },
+  "05-xihuan-zhongwen-wrong-tone": { "intent": "我喜欢学中文 with 学 falling (xuè) and 中 3rd (zhǒng)", "correct": false,
+    "flags": {
+      "tone:0": { "label": "FP", "basis": "Only 学 and 中 were to be altered; 我 was not (engine heard 1 vs expected 3). Speaker drift while deliberately mangling other tones is possible and unverifiable." },
+      "tone:1": { "label": "FP", "basis": "Only 学 and 中 were to be altered; 喜 not (engine heard 2). Same caveat as 我." },
+      "tone:2": { "label": "FP", "basis": "Only 学 and 中 were to be altered; 欢 not (engine heard 2, same 1->2 / 75.7 as clip 04)." },
+      "tone:3": { "label": "TP", "basis": "Instructed falling tone on 学; engine heard tone 4 = instructed." },
+      "tone:4": { "label": "TP", "basis": "Instructed 3rd tone on 中; engine heard tone 3 = instructed." } } },
+  "06-jintian-tianqi-correct":   { "intent": "今天天气很好 normal", "correct": true, "flags": {} },
+  "07-silence":                  { "intent": "room noise only (not silence), reference 你好", "noSpeech": true, "flags": {} },
+  "08-wrong-sentence":           { "intent": "said 你好 while reference was 谢谢", "mismatch": true, "flags": {} }
+}

@@ -1,0 +1,222 @@
+{
+ "sample": "06-jintian-tianqi-correct",
+ "referenceText": "今天天气很好",
+ "cachedFrom": "test-results/results/06-jintian-tianqi-correct.json",
+ "result": {
+  "engine": "toneperfect",
+  "mock": false,
+  "modelVersion": "mandarin-human-v2-85741cdf3967-fbf73d85ee88",
+  "status": "ok",
+  "overall": 98.5,
+  "scores": {
+   "overall": 98.5,
+   "pronunciation": 99.6,
+   "initial": 93.6,
+   "final": 92.7,
+   "tone": 86.4
+  },
+  "syllables": [
+   {
+    "index": 0,
+    "char": "今",
+    "pinyin": "jin1",
+    "wordIndex": 0,
+    "startMs": 882,
+    "endMs": 1092,
+    "initial": {
+     "expected": "j",
+     "heard": "j",
+     "score": 99.2,
+     "decision": "no_correction"
+    },
+    "final": {
+     "expected": "in",
+     "heard": "ing",
+     "score": 27.6,
+     "decision": "no_correction"
+    },
+    "tone": {
+     "expected": 1,
+     "heard": 1,
+     "score": 96.5,
+     "decision": "no_correction"
+    }
+   },
+   {
+    "index": 1,
+    "char": "天",
+    "pinyin": "tian1",
+    "wordIndex": 1,
+    "startMs": 1092,
+    "endMs": 1363,
+    "initial": {
+     "expected": "t",
+     "heard": "t",
+     "score": 82,
+     "decision": "no_correction"
+    },
+    "final": {
+     "expected": "ian",
+     "heard": "ian",
+     "score": 100,
+     "decision": "no_correction"
+    },
+    "tone": {
+     "expected": 1,
+     "heard": 1,
+     "score": 94.4,
+     "decision": "no_correction"
+    }
+   },
+   {
+    "index": 2,
+    "char": "天",
+    "pinyin": "tian1",
+    "wordIndex": 2,
+    "startMs": 1363,
+    "endMs": 1644,
+    "initial": {
+     "expected": "t",
+     "heard": "t",
+     "score": 99.5,
+     "decision": "no_correction"
+    },
+    "final": {
+     "expected": "ian",
+     "heard": "ian",
+     "score": 99.9,
+     "decision": "no_correction"
+    },
+    "tone": {
+     "expected": 1,
+     "heard": 1,
+     "score": 92.3,
+     "decision": "no_correction"
+    }
+   },
+   {
+    "index": 3,
+    "char": "气",
+    "pinyin": "qi4",
+    "wordIndex": 3,
+    "startMs": 1644,
+    "endMs": 1884,
+    "initial": {
+     "expected": "q",
+     "heard": "q",
+     "score": 99.7,
+     "decision": "no_correction"
+    },
+    "final": {
+     "expected": "i",
+     "heard": "i",
+     "score": 99.9,
+     "decision": "no_correction"
+    },
+    "tone": {
+     "expected": 4,
+     "heard": 4,
+     "score": 76,
+     "decision": "no_correction"
+    }
+   },
+   {
+    "index": 4,
+    "char": "很",
+    "pinyin": "hen3",
+    "wordIndex": 4,
+    "startMs": 1884,
+    "endMs": 2205,
+    "initial": {
+     "expected": "h",
+     "heard": "h",
+     "score": 100,
+     "decision": "no_correction"
+    },
+    "final": {
+     "expected": "en",
+     "heard": "en",
+     "score": 99,
+     "decision": "no_correction"
+    },
+    "tone": {
+     "expected": 3,
+     "heard": 2,
+     "score": 99.5,
+     "decision": "no_correction"
+    }
+   },
+   {
+    "index": 5,
+    "char": "好",
+    "pinyin": "hao3",
+    "wordIndex": 5,
+    "startMs": 2205,
+    "endMs": 2596,
+    "initial": {
+     "expected": "h",
+     "heard": "h",
+     "score": 100,
+     "decision": "no_correction"
+    },
+    "final": {
+     "expected": "ao",
+     "heard": "ao",
+     "score": 99.8,
+     "decision": "no_correction"
+    },
+    "tone": {
+     "expected": 3,
+     "heard": 3,
+     "score": 99.3,
+     "decision": "no_correction"
+    }
+   }
+  ],
+  "words": [
+   {
+    "text": "今",
+    "score": 98.2,
+    "startMs": 882,
+    "endMs": 1092
+   },
+   {
+    "text": "天",
+    "score": 98.7,
+    "startMs": 1092,
+    "endMs": 1363
+   },
+   {
+    "text": "天",
+    "score": 98.7,
+    "startMs": 1363,
+    "endMs": 1644
+   },
+   {
+    "text": "气",
+    "score": 98.7,
+    "startMs": 1644,
+    "endMs": 1884
+   },
+   {
+    "text": "很",
+    "score": 98.8,
+    "startMs": 1884,
+    "endMs": 2205
+   },
+   {
+    "text": "好",
+    "score": 99.6,
+    "startMs": 2205,
+    "endMs": 2596
+   }
+  ],
+  "warnings": [],
+  "meta": {
+   "requestId": "req_7f515b69b4aa49b8b793341579d0d7f3",
+   "task": "connected_speech",
+   "creditsCharged": 1,
+   "balanceCredits": 0
+  }
+ }
+}

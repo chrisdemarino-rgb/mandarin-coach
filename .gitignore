@@ -1,0 +1,36 @@
+# secrets and env files (any depth)
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+*.pem
+*.key
+
+# dependencies, local data, databases
+node_modules/
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# test output, real recordings, screenshots, logs
+server/test-results/
+**/recordings/
+public-dev-notes/**/screenshots/
+public-dev-notes/old-standalone/
+*.log
+logs/
+*.local.json
+
+# coordination/status notes (not part of the app)
+STATUS*.md
+PLAN*.md
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/

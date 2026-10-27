@@ -1,0 +1,35 @@
+# Render Blueprint for the Mandarin coach (Docker web service + 1 GB persistent disk for SQLite).
+# Spec: https://render.com/docs/blueprint-spec   Schema: https://render.com/schema/render.yaml.json
+# Secrets use `sync: false`: Render asks for them on its screen at creation; they are never stored in this file.
+services:
+  - type: web
+    name: mandarin-coach
+    runtime: docker                 # builds ./Dockerfile (Node 20, better-sqlite3 prebuilt binary + build tools fallback)
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    region: singapore               # closest to Perth; cannot be changed after creation
+    plan: 0.5c-512mb                # the "Starter" plan: 0.5 CPU / 512 MB, $7/mo. Persistent disks need a paid plan.
+    numInstances: 1                 # a service with a disk cannot be scaled to more than one instance
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit       # redeploy on every push to the default branch (a deploy with a disk = a few seconds of downtime)
+    disk:
+      name: coach-data
+      mountPath: /data              # holds coach.db; matches DATA_DIR below
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATA_DIR
+        value: /data
+      # PORT is set by Render itself (default 10000); the server reads $PORT. Do not set it here.
+      - key: APP_PASSCODE
+        sync: false
+      - key: TONEPERFECT_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      # Optional pair (Azure Mandarin voice). Leave blank on the Render screen if you do not have them.
+      - key: AZURE_SPEECH_KEY
+        sync: false
+      - key: AZURE_SPEECH_REGION
+        sync: false

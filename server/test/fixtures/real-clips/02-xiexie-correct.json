@@ -1,0 +1,94 @@
+{
+ "sample": "02-xiexie-correct",
+ "referenceText": "谢谢",
+ "cachedFrom": "test-results/results/02-xiexie-correct.json",
+ "result": {
+  "engine": "toneperfect",
+  "mock": false,
+  "modelVersion": "mandarin-human-v2-85741cdf3967-fbf73d85ee88",
+  "status": "ok",
+  "overall": 96.6,
+  "scores": {
+   "overall": 96.6,
+   "pronunciation": 99.7,
+   "initial": 99.5,
+   "final": 92.7,
+   "tone": 60.3
+  },
+  "syllables": [
+   {
+    "index": 0,
+    "char": "谢",
+    "pinyin": "xie4",
+    "wordIndex": 0,
+    "startMs": 541,
+    "endMs": 791,
+    "initial": {
+     "expected": "x",
+     "heard": "x",
+     "score": 99.9,
+     "decision": "no_correction"
+    },
+    "final": {
+     "expected": "ie",
+     "heard": "ie",
+     "score": 99,
+     "decision": "no_correction"
+    },
+    "tone": {
+     "expected": 4,
+     "heard": 4,
+     "score": 76.5,
+     "decision": "no_correction"
+    }
+   },
+   {
+    "index": 1,
+    "char": "谢",
+    "pinyin": "xie4",
+    "wordIndex": 1,
+    "startMs": 791,
+    "endMs": 1072,
+    "initial": {
+     "expected": "x",
+     "heard": "x",
+     "score": 100,
+     "decision": "no_correction"
+    },
+    "final": {
+     "expected": "ie",
+     "heard": "ie",
+     "score": 99.3,
+     "decision": "no_correction"
+    },
+    "tone": {
+     "expected": 4,
+     "heard": 3,
+     "score": 60,
+     "decision": "review"
+    }
+   }
+  ],
+  "words": [
+   {
+    "text": "谢",
+    "score": 98.5,
+    "startMs": 541,
+    "endMs": 791
+   },
+   {
+    "text": "谢",
+    "score": 98.6,
+    "startMs": 791,
+    "endMs": 1072
+   }
+  ],
+  "warnings": [],
+  "meta": {
+   "requestId": "req_1adfe698865e48b594f315b9037d2566",
+   "task": "connected_speech",
+   "creditsCharged": 1,
+   "balanceCredits": 0
+  }
+ }
+}

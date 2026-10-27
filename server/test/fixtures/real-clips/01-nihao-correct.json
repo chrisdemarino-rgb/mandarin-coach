@@ -1,0 +1,94 @@
+{
+ "sample": "01-nihao-correct",
+ "referenceText": "你好",
+ "cachedFrom": "test-results/results/01-nihao-correct.json",
+ "result": {
+  "engine": "toneperfect",
+  "mock": false,
+  "modelVersion": "mandarin-human-v2-85741cdf3967-fbf73d85ee88",
+  "status": "ok",
+  "overall": 100,
+  "scores": {
+   "overall": 100,
+   "pronunciation": 100,
+   "initial": 99.8,
+   "final": 99.2,
+   "tone": 91.5
+  },
+  "syllables": [
+   {
+    "index": 0,
+    "char": "你",
+    "pinyin": "ni3",
+    "wordIndex": 0,
+    "startMs": 564,
+    "endMs": 866,
+    "initial": {
+     "expected": "n",
+     "heard": "n",
+     "score": 100,
+     "decision": "no_correction"
+    },
+    "final": {
+     "expected": "i",
+     "heard": "i",
+     "score": 99.8,
+     "decision": "no_correction"
+    },
+    "tone": {
+     "expected": 3,
+     "heard": 3,
+     "score": 93.2,
+     "decision": "no_correction"
+    }
+   },
+   {
+    "index": 1,
+    "char": "好",
+    "pinyin": "hao3",
+    "wordIndex": 1,
+    "startMs": 866,
+    "endMs": 1501,
+    "initial": {
+     "expected": "h",
+     "heard": "h",
+     "score": 100,
+     "decision": "no_correction"
+    },
+    "final": {
+     "expected": "ao",
+     "heard": "ao",
+     "score": 100,
+     "decision": "no_correction"
+    },
+    "tone": {
+     "expected": 3,
+     "heard": 3,
+     "score": 97.4,
+     "decision": "no_correction"
+    }
+   }
+  ],
+  "words": [
+   {
+    "text": "你",
+    "score": 98.8,
+    "startMs": 564,
+    "endMs": 866
+   },
+   {
+    "text": "好",
+    "score": 99.5,
+    "startMs": 866,
+    "endMs": 1501
+   }
+  ],
+  "warnings": [],
+  "meta": {
+   "requestId": "req_6731541d8c7d4d1eb11167004c7bc413",
+   "task": "connected_speech",
+   "creditsCharged": 1,
+   "balanceCredits": 0
+  }
+ }
+}

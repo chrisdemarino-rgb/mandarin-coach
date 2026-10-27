@@ -1,0 +1,222 @@
+{
+ "sample": "05-xihuan-zhongwen-wrong-tone",
+ "referenceText": "我喜欢学中文",
+ "cachedFrom": "test-results/results/05-xihuan-zhongwen-wrong-tone.json",
+ "result": {
+  "engine": "toneperfect",
+  "mock": false,
+  "modelVersion": "mandarin-human-v2-85741cdf3967-fbf73d85ee88",
+  "status": "ok",
+  "overall": 57,
+  "scores": {
+   "overall": 57,
+   "pronunciation": 86.2,
+   "initial": 81.5,
+   "final": 89.6,
+   "tone": 61.1
+  },
+  "syllables": [
+   {
+    "index": 0,
+    "char": "我",
+    "pinyin": "wo3",
+    "wordIndex": 0,
+    "startMs": 40,
+    "endMs": 221,
+    "initial": {
+     "expected": null,
+     "heard": null,
+     "score": null,
+     "decision": "no_decision"
+    },
+    "final": {
+     "expected": "uo",
+     "heard": "uo",
+     "score": 99.4,
+     "decision": "no_correction"
+    },
+    "tone": {
+     "expected": 3,
+     "heard": 1,
+     "score": 75.6,
+     "decision": "review"
+    }
+   },
+   {
+    "index": 1,
+    "char": "喜",
+    "pinyin": "xi3",
+    "wordIndex": 1,
+    "startMs": 221,
+    "endMs": 452,
+    "initial": {
+     "expected": "x",
+     "heard": "x",
+     "score": 57.3,
+     "decision": "no_correction"
+    },
+    "final": {
+     "expected": "i",
+     "heard": "i",
+     "score": 99.4,
+     "decision": "no_correction"
+    },
+    "tone": {
+     "expected": 3,
+     "heard": 2,
+     "score": 75.1,
+     "decision": "review"
+    }
+   },
+   {
+    "index": 2,
+    "char": "欢",
+    "pinyin": "huan1",
+    "wordIndex": 2,
+    "startMs": 452,
+    "endMs": 823,
+    "initial": {
+     "expected": "h",
+     "heard": "h",
+     "score": 99.8,
+     "decision": "no_correction"
+    },
+    "final": {
+     "expected": "uan",
+     "heard": "uan",
+     "score": 94.8,
+     "decision": "no_correction"
+    },
+    "tone": {
+     "expected": 1,
+     "heard": 2,
+     "score": 75.7,
+     "decision": "review"
+    }
+   },
+   {
+    "index": 3,
+    "char": "学",
+    "pinyin": "xue2",
+    "wordIndex": 3,
+    "startMs": 1306,
+    "endMs": 1788,
+    "initial": {
+     "expected": "x",
+     "heard": "x",
+     "score": 81,
+     "decision": "no_correction"
+    },
+    "final": {
+     "expected": "üe",
+     "heard": "üe",
+     "score": 99.7,
+     "decision": "no_correction"
+    },
+    "tone": {
+     "expected": 2,
+     "heard": 4,
+     "score": 60,
+     "decision": "review"
+    }
+   },
+   {
+    "index": 4,
+    "char": "中",
+    "pinyin": "zhong1",
+    "wordIndex": 4,
+    "startMs": 1788,
+    "endMs": 2391,
+    "initial": {
+     "expected": "zh",
+     "heard": "j",
+     "score": 68.3,
+     "decision": "no_correction"
+    },
+    "final": {
+     "expected": "ong",
+     "heard": "ong",
+     "score": 77,
+     "decision": "no_correction"
+    },
+    "tone": {
+     "expected": 1,
+     "heard": 3,
+     "score": 67.4,
+     "decision": "review"
+    }
+   },
+   {
+    "index": 5,
+    "char": "文",
+    "pinyin": "wen2",
+    "wordIndex": 5,
+    "startMs": 3015,
+    "endMs": 3366,
+    "initial": {
+     "expected": null,
+     "heard": null,
+     "score": null,
+     "decision": "no_decision"
+    },
+    "final": {
+     "expected": "uen",
+     "heard": "uang",
+     "score": null,
+     "decision": "unassessable"
+    },
+    "tone": {
+     "expected": 2,
+     "heard": 2,
+     "score": 79.7,
+     "decision": "no_correction"
+    }
+   }
+  ],
+  "words": [
+   {
+    "text": "我",
+    "score": 98,
+    "startMs": 40,
+    "endMs": 221
+   },
+   {
+    "text": "喜",
+    "score": 98,
+    "startMs": 221,
+    "endMs": 452
+   },
+   {
+    "text": "欢",
+    "score": 98.2,
+    "startMs": 452,
+    "endMs": 823
+   },
+   {
+    "text": "学",
+    "score": 98.1,
+    "startMs": 1306,
+    "endMs": 1788
+   },
+   {
+    "text": "中",
+    "score": 62.9,
+    "startMs": 1788,
+    "endMs": 2391
+   },
+   {
+    "text": "文",
+    "score": 80.6,
+    "startMs": 3015,
+    "endMs": 3366
+   }
+  ],
+  "warnings": [],
+  "meta": {
+   "requestId": "req_187f657081a1485aa1e14eac3049803b",
+   "task": "connected_speech",
+   "creditsCharged": 1,
+   "balanceCredits": 0
+  }
+ }
+}

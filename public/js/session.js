@@ -35,6 +35,7 @@ export function createSession() {
     error: null,              // {message, code, retryable, canSkip, kind:'mic'|'upload'|'assess'|'audio'|'tts', network}
     notice: "",               // soft, non-blocking note (e.g. coach audio skipped)
     pauseReason: "",
+    autoResumePending: false, // paused by a real interruption that may end by itself (see S.interrupt / S.onAudioBack)
     recording: null,          // last take {blob, mime, durationMs, url}
     recStart: 0,
     playPos: { t: 0, d: 0, what: "" },
@@ -309,16 +310,33 @@ export function createSession() {
     S.emit();
   };
 
-  S.resume = async () => {
+  /** Resume from Pause. `auto` = we are resuming by ourselves after a real interruption ended (no user tap), so a failure
+   *  (iOS wants a gesture, mic refused) falls back to the manual "Paused... Tap Resume" banner instead of a mic error.
+   *  Keeps the chunk/piece/fade; a take interrupted while listening goes straight back to listening (no model replay). */
+  S.resume = async ({ auto = false } = {}) => {
     if (!machine.can("RESUME")) return;
     const to = machine.resumeTo;
-    S.error = null; S.pauseReason = "";
+    S.error = null; S.pauseReason = ""; S.autoResumePending = false;
+    audio.recordEvent("session.resume", "info", `${auto ? "auto" : "manual tap"} -> ${to} @ chunk ${S.chunkIdx} piece ${S.pieceIdx}`);
     machine.send("RESUME");
     S.emit();
     try { ensureInit(); await audio.unlock(); await audio.armMic(); S.micArmed = true; }
-    catch (e) { const me = micError(e); S.error = { kind: "mic", action: "resume", message: me.message, code: me.code, retryable: true, canSkip: false }; machine.send("PAUSE"); S.emit(); return; }
+    catch (e) {
+      const me = micError(e);
+      machine.send("PAUSE");
+      if (auto) { S.pauseReason = MANUAL_PAUSE_MSG; audio.recordEvent("session.resume", "info", `auto-resume failed (${me.code}); manual Resume needed`); }
+      else S.error = { kind: "mic", action: "resume", message: me.message, code: me.code, retryable: true, canSkip: false };
+      S.emit(); return;
+    }
     if (to === "result" && S.assessment) { S.emit(); return; }
-    if (to === "listening" || to === "prompting" || !S.assessment) { machine.send("RETRY") || 0; enterPrompting(); }
+    if (to === "listening" && !S.assessment) {
+      // Same piece, same position in the loop: just start the take again (the coach already spoke; do not replay it).
+      const { run } = newFlow();
+      await discarding;
+      if (alive(run)) await enterListening(run);
+      return;
+    }
+    if (to === "prompting" || !S.assessment) { machine.send("RETRY") || 0; enterPrompting(); }
   };
 
   S.skipPrompt = () => {
@@ -609,19 +627,38 @@ export function createSession() {
 
   /* ------------------------------------------------------------------ audio events */
   /** Phone lock / incoming call / app switch / mic taken away: never pretend the take is fine. Pause with a clear message. */
-  S.interrupt = () => {
+  // Only called for a REAL, persisted interruption (audio.js debounces and ignores our own mic release / playback / session switches).
+  // Pauses in place (chunk, piece and fade are kept) and, when the cause can end by itself, resumes automatically (S.onAudioBack).
+  const MANUAL_PAUSE_MSG = "Paused: audio was interrupted (phone lock, a call, or switching apps) and couldn't restart by itself. Tap Resume to carry on from the same spot.";
+  const AUTO_PAUSE_HINT = "Audio was interrupted. Carrying on by itself when it's back, or tap Resume.";
+  S.interrupt = (info = {}) => {
     if (!S.sessionActive || machine.state === "paused") return;
     const wasListening = machine.state === "listening";
     S.pause("interrupted");
-    S.pauseReason = wasListening
-      ? "Paused: your recording was interrupted (phone lock, a call, or switching apps). That take was discarded. Tap Resume to carry on."
-      : "Paused: audio was interrupted (phone lock, a call, or switching apps). Tap Resume to carry on.";
+    if (machine.state !== "paused") { audio.recordEvent("session.interrupt", "ignored", `cannot pause from ${machine.state}`); return; }
+    const recoverable = info.recoverable !== false;
+    S.autoResumePending = recoverable;
+    audio.recordEvent("session.interrupt", "REAL", `${info.source || "?"} while ${wasListening ? "listening (take discarded)" : "not recording"}; auto-resume ${recoverable ? "armed" : "off"}`);
+    S.pauseReason = recoverable ? AUTO_PAUSE_HINT : MANUAL_PAUSE_MSG;
     S.emit();
+  };
+  /** The interruption ended (page visible again / audioSession active again / mic unmuted): resume by ourselves if we paused for it. */
+  let autoTimer = null;
+  S.onAudioBack = (info = {}) => {
+    if (!S.autoResumePending || machine.state !== "paused") return;
+    clearTimeout(autoTimer);
+    // Short settle delay: iOS needs a moment after unlock/return before the mic can be reopened reliably.
+    autoTimer = setTimeout(() => {
+      if (!S.autoResumePending || machine.state !== "paused") return;
+      S.resume({ auto: true });
+    }, 400);
   };
 
   try {
     ensureInit();
-    audio.on("interrupted", () => S.interrupt());
+    // (isInterrupted, info): true only for a persisted real interruption, false when it is over. The old handler ignored the boolean and
+    // paused on BOTH, so the 'active' statechange iOS fires after our own mic release paused the session.
+    audio.on("interrupted", (isInt, info) => (isInt ? S.interrupt(info) : S.onAudioBack(info)));
     audio.on("maxlength", () => {
       // Recording hit the safety cap: treat as a normal stop so the take can be assessed or discarded by `valid`.
       if (machine.state === "listening") S.stopRecording();

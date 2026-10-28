@@ -8,7 +8,8 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
-    "test": "node --test server/test/*.test.js"
+    "test": "node --test server/test/*.test.js",
+    "test:interruptions": "node tests/interruptions.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^11.5.0",

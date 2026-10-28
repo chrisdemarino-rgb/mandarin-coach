@@ -18,7 +18,13 @@
 // Public API:
 //   init(opts)                      -> audioEl. opts: {keepMicOpen=true, sessionStrategy='before'|'kick', postPlaybackGuardMs=450,
 //                                       maxRecordMs=110000, echoCancellation=true, noiseSuppression=true, autoGainControl=true, audioEl, log}
-//   on(event, fn) / off(event, fn)  events: 'state' (newState, oldState), 'log' (msg), 'error' (err), 'interrupted' (bool), 'maxlength'
+//   on(event, fn) / off(event, fn)  events: 'state' (newState, oldState), 'log' (msg), 'error' (err), 'maxlength',
+//                                       'interrupted' (isInterrupted:bool, info:{source, recoverable}) -- DEBOUNCED: fires true only for a REAL
+//                                       interruption (page hidden >= hiddenMs, audioSession 'interrupted' persisting >= interruptDebounceMs,
+//                                       mic track muted that long while recording, or mic track 'ended' that we did not cause) and false when it is
+//                                       over (page visible, audioSession back, track unmuted). Our own mic release, playback start/stop and
+//                                       audioSession.type switches never count. 'diag' (entry) fires for every diagnostic entry.
+//   recordEvent(name, verdict, detail) / getEvents() / clearEvents()   in-memory ring buffer, also window.__audioEvents + console.debug
 //   getState()
 //   unlock()                        -> Promise<bool>; call inside a tap handler, once. Unlocks <audio>, sets session 'playback'.
 //   play(url|Blob)                  -> Promise resolved when 'ended' fired (after which state is armed/idle). Rejects if recording.
@@ -40,7 +46,7 @@ let recorder = null;
 let chunks = [];
 let state = 'idle';
 let opts = {
-  keepMicOpen: true, sessionStrategy: 'before', postPlaybackGuardMs: 450, maxRecordMs: 110000,
+  keepMicOpen: true, sessionStrategy: 'before', postPlaybackGuardMs: 450, maxRecordMs: 110000, interruptDebounceMs: 1800, hiddenMs: 1500,
   echoCancellation: true, noiseSuppression: true, autoGainControl: true, log: null,
 };
 let unlocked = false;
@@ -53,6 +59,76 @@ let maxTimer = null;
 let overlapTimer = null;
 let currentPlayResolve = null;
 let currentObjectUrl = null;
+
+// ---- interruption handling (v7) -------------------------------------------------------------------------------
+// Why: iOS fires audioSession 'statechange' (and track mute/ended) as a side effect of OUR OWN mic release, playback start/stop and
+// audioSession.type switches, and for brief Bluetooth route changes. The old code treated every statechange as an interruption.
+// Rules now: (1) everything we do opens a short "ours" window (own()); (2) only the 'interrupted' state, a muted mic, or hidden page can
+// start an interruption, and only if it PERSISTS past a debounce; (3) events are logged with a verdict in a ring buffer.
+const OWN_MS = 1500;                 // events within this long after one of our own actions are attributed to us
+let ownUntil = 0;
+let realInterruption = null;         // source name while a persisted interruption is active (announced via 'interrupted' true)
+let hiddenAt = 0;
+const suspectTimers = {};
+const EVENT_MAX = 300;
+const eventRing = [];
+const t0Diag = (typeof performance !== 'undefined' ? performance.now() : 0);
+if (typeof window !== 'undefined') window.__audioEvents = eventRing;
+export function getEvents() { return eventRing.slice(); }
+export function clearEvents() { eventRing.length = 0; }
+// verdict: 'info' | 'ours' | 'ignored' | 'debounce-start' | 'debounced' (cleared before persisting) | 'REAL' | 'recovered'
+export function recordEvent(name, verdict = 'info', detail = '') {
+  const e = { t: +(((typeof performance !== 'undefined' ? performance.now() : 0) - t0Diag) / 1000).toFixed(2), name, verdict, detail: String(detail || ''),
+    state, hidden: typeof document !== 'undefined' ? !!document.hidden : null, session: hasSession() ? navigator.audioSession.state : null };
+  eventRing.push(e); if (eventRing.length > EVENT_MAX) eventRing.shift();
+  try { console.debug('[audio-event]', e.t, name, verdict, e.detail); } catch (err) {}
+  emit('diag', e);
+  return e;
+}
+const isOwn = () => Date.now() < ownUntil;
+function own(label, ms = OWN_MS) { ownUntil = Math.max(ownUntil, Date.now() + ms); recordEvent('own:' + label, 'ours'); }
+// Stop every mic track. We call this on purpose, so it is "ours" (stop() itself does not fire 'ended' per spec, but Safari may fire
+// mute/statechange around it).
+function stopStream(why) {
+  if (!stream) return;
+  own('mic-stop:' + why);
+  stream.getTracks().forEach(t => t.stop()); stream = null;
+}
+// Start a debounce for a suspected interruption. After the delay (plus any remaining "ours" window) it becomes REAL only if check() still holds.
+function suspect(source, check, ms, { extendOwn = true } = {}) {
+  if (suspectTimers[source]) return;
+  const wait = ms + (extendOwn ? Math.max(0, ownUntil - Date.now()) : 0);
+  recordEvent(source, 'debounce-start', `${wait} ms${extendOwn && isOwn() ? ' (extended: our own action in progress)' : ''}`);
+  suspectTimers[source] = setTimeout(() => {
+    delete suspectTimers[source];
+    if (check()) declareInterruption(source); else recordEvent(source, 'debounced', 'cleared before it persisted');
+  }, wait);
+}
+function unsuspect(source, why) {
+  if (!suspectTimers[source]) return;
+  clearTimeout(suspectTimers[source]); delete suspectTimers[source];
+  recordEvent(source, 'debounced', why || 'recovered before it persisted');
+}
+function declareInterruption(source, { recoverable = true } = {}) {
+  if (realInterruption) { recordEvent(source, 'ignored', `already interrupted by ${realInterruption}`); return; }
+  realInterruption = source;
+  if (state === 'recording') interruptedDuringTake = true;
+  recordEvent(source, 'REAL', recoverable ? 'interruption persisted' : 'not auto-recoverable');
+  emit('interrupted', true, { source, recoverable });
+  if (state === 'playing') stop();   // after the emit, so the session has already aborted its flow when play() settles
+}
+// Is the interruption over? Page visible, audioSession not 'interrupted', no live mic track muted. Then announce recovery once.
+function checkRecovered() {
+  if (!realInterruption) return;
+  if (realInterruption === 'mic-ended') return;   // nothing tells us the mic is back: needs a user Resume
+  if (typeof document !== 'undefined' && document.hidden) return;
+  if (hasSession() && navigator.audioSession.state === 'interrupted') return;
+  if (stream && stream.getAudioTracks().some(t => t.readyState === 'live' && t.muted)) return;
+  const source = realInterruption; realInterruption = null;
+  recordEvent(source, 'recovered', 'interruption over');
+  emit('interrupted', false, { source });
+}
+function clearInterruption(why) { if (realInterruption) { recordEvent(realInterruption, 'info', 'interruption state cleared: ' + why); realInterruption = null; } }
 
 // Tiny silent 8 kHz mono WAV used only to unlock the <audio> element on first tap.
 const SILENT_WAV = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
@@ -77,6 +153,7 @@ const hasSession = () => typeof navigator !== 'undefined' && 'audioSession' in n
 export function getSessionType() { return hasSession() ? navigator.audioSession.type : null; }
 function setSession(type) {
   if (!hasSession()) return false;
+  if (navigator.audioSession.type !== type) own('audioSession.type=' + type);   // the statechange this triggers is ours
   try { navigator.audioSession.type = type; log(`audioSession.type = ${type}`); return true; }
   catch (e) { log(`audioSession.type=${type} failed: ${e.message}`); return false; }
 }
@@ -106,19 +183,47 @@ export function init(options = {}) {
   if (!audioEl.isConnected && options.attach !== false) { audioEl.style.display = 'none'; document.body.appendChild(audioEl); }
   if (!audioEl.__wired) { audioEl.__wired = true;
   audioEl.addEventListener('ended', onEnded);
-  audioEl.addEventListener('error', () => { const err = new Error('audio element error ' + (audioEl.error && audioEl.error.code)); emit('error', err); settlePlay(err); });
+  audioEl.addEventListener('error', () => { const err = new Error('audio element error ' + (audioEl.error && audioEl.error.code)); recordEvent('audio.error', 'info', err.message); emit('error', err); settlePlay(err); });
+  // Diagnostics only: the <audio> element's own pause/play events never pause the session.
+  audioEl.addEventListener('pause', () => recordEvent('audio.pause', (isOwn() || state !== 'playing') ? 'ours' : 'info', state === 'playing' ? 'while playing (system pause?)' : ''));
+  audioEl.addEventListener('play', () => recordEvent('audio.play', 'info'));
+  audioEl.addEventListener('ended', () => recordEvent('audio.ended', 'info'));
   if (hasSession() && navigator.audioSession.addEventListener) {
     navigator.audioSession.addEventListener('statechange', () => {
       const st = navigator.audioSession.state;
       log(`audioSession.state = ${st}`);
-      const interrupted = st === 'interrupted';
-      if (interrupted && state === 'recording') interruptedDuringTake = true;
-      emit('interrupted', interrupted);
+      if (st === 'interrupted') {
+        recordEvent('audioSession.statechange:interrupted', isOwn() ? 'ours' : 'info', isOwn() ? 'inside our own-action window; only counts if it persists' : '');
+        suspect('audioSession', () => hasSession() && navigator.audioSession.state === 'interrupted', opts.interruptDebounceMs);
+      } else {
+        // 'active' / 'inactive' are what iOS reports around our own mic release / playback: never an interruption by themselves.
+        recordEvent('audioSession.statechange:' + st, isOwn() ? 'ours' : 'ignored');
+        unsuspect('audioSession', 'audioSession is ' + st + ' again');
+        checkRecovered();
+      }
     });
   }
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { if (state === 'recording') interruptedDuringTake = true; if (state === 'playing') stop(); }
+    if (document.hidden) {
+      hiddenAt = Date.now();
+      recordEvent('visibilitychange:hidden', 'info');
+      // Debounced: a brief hide (Control Center, notification, app-switcher peek) is not an interruption.
+      suspect('hidden', () => document.hidden || (hiddenAt && Date.now() - hiddenAt >= opts.hiddenMs), opts.hiddenMs, { extendOwn: false });
+    } else {
+      recordEvent('visibilitychange:visible', 'info', hiddenAt ? `hidden ${Date.now() - hiddenAt} ms` : '');
+      // Timers are frozen while a locked page is suspended, so judge by how long we were actually hidden.
+      const wasHidden = hiddenAt ? Date.now() - hiddenAt : 0;
+      unsuspect('hidden', `visible again after ${wasHidden} ms`);
+      if (wasHidden >= opts.hiddenMs && !realInterruption) declareInterruption('hidden');
+      hiddenAt = 0;
+      checkRecovered();
+    }
   });
+  // Diagnostics only (no behaviour): other lifecycle signals we want on record when debugging on a real device.
+  window.addEventListener('pagehide', () => recordEvent('pagehide', 'info'));
+  window.addEventListener('pageshow', () => recordEvent('pageshow', 'info'));
+  window.addEventListener('blur', () => recordEvent('window.blur', 'ignored'));
+  window.addEventListener('focus', () => recordEvent('window.focus', 'info'));
   }
   log(`init: audioSession ${hasSession() ? 'present' : 'ABSENT'}, mime=${pickMimeType() || '(default)'}`);
   return audioEl;
@@ -151,6 +256,7 @@ export function unlock() {
 
 function onEnded() {
   lastPlaybackEndedAt = Date.now();
+  own('playback-ended');
   if (currentObjectUrl) { URL.revokeObjectURL(currentObjectUrl); currentObjectUrl = null; }
   settlePlay(null);
   setState(streamLive() ? 'armed' : 'idle');
@@ -167,12 +273,13 @@ export async function play(src) {
   // iOS Safari: a mic stream kept alive across a playback often produces EMPTY takes afterwards (verified on iPhone,
   // iOS 18.7). So fully release the mic before any playback; the next take reopens it. Bonus: Bluetooth headphones
   // go back to high-quality playback while the model speaks.
-  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; log('mic released before playback (reopened for next take)'); }
+  if (stream) { stopStream('before-playback'); log('mic released before playback (reopened for next take)'); }
   // If the mic is NOT open, make sure the session is 'playback' (media channel, ignores the mute switch).
   // If the mic IS open we must stay on 'play-and-record' (setting 'playback' would end the mic track per the W3C draft).
   if (!streamLive()) setSession('playback');
   let url = src;
   if (src instanceof Blob) { currentObjectUrl = URL.createObjectURL(src); url = currentObjectUrl; }
+  own('playback-start');
   audioEl.src = url;
   audioEl.currentTime = 0;
   const done = new Promise((resolve, reject) => { currentPlayResolve = { resolve, reject }; });
@@ -184,6 +291,7 @@ export async function play(src) {
 
 export function stop() {
   if (!audioEl) return;
+  own('stop');
   try { audioEl.pause(); } catch (e) {}
   lastPlaybackEndedAt = Date.now();
   if (state === 'playing') { settlePlay(null); setState(streamLive() ? 'armed' : 'idle'); }
@@ -195,26 +303,46 @@ function isSpeaking() {
 
 async function acquireStream() {
   if (streamLive()) return stream;
-  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  if (stream) stopStream('stale-before-acquire');
   if (opts.sessionStrategy === 'kick') setSession('auto'); else setSession('play-and-record');
   const constraints = { audio: {
     echoCancellation: opts.echoCancellation, noiseSuppression: opts.noiseSuppression, autoGainControl: opts.autoGainControl,
     channelCount: 1,
   } };
+  own('getUserMedia');   // route changes (Bluetooth HFP switch) while the mic opens are ours
   stream = await navigator.mediaDevices.getUserMedia(constraints);
+  own('getUserMedia-done');
   if (opts.sessionStrategy === 'kick') setSession('play-and-record');
+  const myStream = stream;
   const t = stream.getAudioTracks()[0];
   if (t) {
     log(`mic track: "${t.label}" settings=${JSON.stringify(t.getSettings ? t.getSettings() : {})}`);
-    t.addEventListener('ended', () => { log('mic track ended'); if (state === 'recording') interruptedDuringTake = true; if (state === 'armed') setState('idle'); stream = null; });
-    t.addEventListener('mute', () => { log('mic track muted (system interruption?)'); if (state === 'recording') interruptedDuringTake = true; });
-    t.addEventListener('unmute', () => log('mic track unmuted'));
+    t.addEventListener('ended', () => {
+      log('mic track ended');
+      // Ours: we already released this stream (stale track) or are inside one of our own actions. Never an interruption.
+      if (stream !== myStream) { recordEvent('mic.ended', 'ours', 'stale track (we released it)'); return; }
+      // Our own releases go through stopStream(), which nulls `stream` first (so they are the stale case above, and track.stop() does not
+      // fire 'ended' anyway). A live current track that ends is therefore the system's doing, even inside an own-action window.
+      if (state === 'armed') setState('idle');
+      stream = null;
+      recordEvent('mic.ended', 'info', 'current track ended; not caused by us' + (isOwn() ? ' (inside own-action window)' : ''));
+      declareInterruption('mic-ended', { recoverable: false });
+    });
+    t.addEventListener('mute', () => {
+      log('mic track muted (system interruption?)');
+      if (stream !== myStream) { recordEvent('mic.mute', 'ours', 'stale track'); return; }
+      if (state !== 'recording') { recordEvent('mic.mute', isOwn() ? 'ours' : 'ignored', `not recording (state ${state})`); return; }
+      recordEvent('mic.mute', isOwn() ? 'ours' : 'info', 'while recording; counts only if it persists');
+      suspect('mic-mute', () => stream === myStream && t.muted, opts.interruptDebounceMs);
+    });
+    t.addEventListener('unmute', () => { log('mic track unmuted'); recordEvent('mic.unmute', 'info'); unsuspect('mic-mute', 'unmuted again'); checkRecovered(); });
   }
   return stream;
 }
 
 // Open the mic ahead of time (must be inside a tap the first time). Optional: startRecording() does this itself.
 export async function armMic() {
+  clearInterruption('armMic');   // user/session is (re)arming: any earlier interruption is over or handed to the user
   await acquireStream();
   if (stream) stream.getAudioTracks().forEach(t => { t.enabled = false; });
   if (state === 'idle') setState('armed');
@@ -229,6 +357,7 @@ export async function startRecording() {
   const wait = opts.postPlaybackGuardMs - (Date.now() - lastPlaybackEndedAt);
   if (wait > 0) await new Promise(r => setTimeout(r, wait));
   if (state === 'playing' || isSpeaking()) throw new Error('audio started during guard delay; not recording');
+  clearInterruption('startRecording');
   await acquireStream();
   // Reused stream: make sure the session is still play-and-record (something may have switched it).
   if (hasSession() && navigator.audioSession.type !== 'play-and-record') setSession('play-and-record');
@@ -270,7 +399,7 @@ export function stopRecording() {
       // A long take that produced no data means the mic stream went dead: drop it so the next take reopens it.
       if (reason === 'too_short' && durationMs >= 1000 && blob.size < 500 && stream) {
         log('dead mic stream detected (empty take); closing it so the next take reopens the mic');
-        stream.getTracks().forEach(t => t.stop()); stream = null;
+        stopStream('dead-stream');
       }
       if (!opts.keepMicOpen) releaseMic();
       setState('processing');
@@ -297,7 +426,7 @@ export function resetToPlayback({ kick = true } = {}) {
 
 export function releaseMic() {
   if (recorder && recorder.state !== 'inactive') { try { recorder.stop(); } catch (e) {} }
-  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; log('mic released'); }
+  if (stream) { stopStream('releaseMic'); log('mic released'); }
   resetToPlayback();
   if (state === 'armed') setState('idle');
 }

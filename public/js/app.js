@@ -339,5 +339,7 @@ async function init() {
 }
 init();
 
-// If the page is hidden mid-recording (iOS suspends capture), pause cleanly. audio.js also emits 'interrupted'.
-document.addEventListener("visibilitychange", () => { if (document.hidden && S.state === "listening") S.interrupt(); });
+// Hidden-page / audioSession interruptions are now detected (debounced) inside audio.js, which emits 'interrupted' to session.js.
+// The old immediate "hidden while listening -> pause" listener that lived here fired on every brief hide, so it was removed.
+// Diagnostics: ?debug=1 shows a small on-screen audio-event log (off and not loaded otherwise).
+if (new URLSearchParams(location.search).get("debug") === "1") import("./audio-debug.js").then((m) => m.initAudioDebugPanel()).catch((e) => console.warn("audio debug panel failed", e));

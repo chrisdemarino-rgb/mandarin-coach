@@ -276,13 +276,13 @@ export function createDrill(S) {
   }
   try {
     ensureInit();
-    audio.on("interrupted", interrupted);
+    audio.on("interrupted", (isInt) => { if (isInt) interrupted(); });   // true = real, debounced interruption; false = it ended (ignore)
     audio.on("maxlength", () => { if (D.state === "listening") D.stop(); });
     audio.on("error", (e) => {
       if (D.state === "listening") { const me = micError(e instanceof Error ? e : new Error(String((e && e.message) || e))); abortFlow(); D.micArmed = false; D.state = "ready"; D.error = { kind: "mic", action: "resume", message: me.message, canSkip: false }; D.emit(); }
     });
   } catch (e) { console.warn("drill audio init failed", e); }
-  document.addEventListener("visibilitychange", () => { if (document.hidden && D.state === "listening") interrupted(); });
+  // (The immediate "hidden while listening" listener was removed: audio.js now reports persisted hidden/interrupted states via 'interrupted'.)
 
   return D;
 }

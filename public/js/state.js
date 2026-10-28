@@ -71,7 +71,8 @@ export const DEFAULT_SETTINGS = {
   showFeedback: true,
   showPinyin: true,
   autoCoach: true,
-  qaMode: false,                // LOCAL ONLY: Q&A practice selected (the backend /api/prefs practiceMode enum has no "qa"; it is never sent)
+  qaMode: false,                // Q&A practice selected (server pref practiceMode "qa"; the LOCAL practiceMode stays a real /api/attempt mode)
+  talkMode: false,              // Free talk selected (server pref practiceMode "talk" once the backend accepts it; until then local only)
 };
 
 export function createStore() {

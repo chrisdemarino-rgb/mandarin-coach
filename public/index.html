@@ -88,6 +88,7 @@
               <option value="listen_repeat">Listen and repeat</option>
               <option value="fading_cues">Fading cues</option>
               <option value="qa">Q&amp;A</option>
+              <option value="talk">Free talk</option>
             </select>
           </div>
           <div>
@@ -322,6 +323,7 @@
               <option value="listen_repeat">Listen and repeat</option>
               <option value="fading_cues">Fading cues</option>
               <option value="qa">Q&amp;A</option>
+              <option value="talk">Free talk</option>
             </select>
           </div>
           <div>
@@ -400,6 +402,73 @@
           <button id="btnQaRetry" class="btn" type="button">Retry</button>
           <button id="btnQaSkip" class="btn" type="button">Skip</button>
           <button id="btnQaFinish" class="btn danger" type="button">Finish</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== FREE TALK ========== -->
+    <section id="view-talk" class="view" aria-label="Free talk">
+      <div class="practice-scroll" id="talkScroll">
+        <div class="selects">
+          <div>
+            <label class="label" for="talkModeSelect">Practice mode</label>
+            <select id="talkModeSelect" class="select">
+              <option value="listen_repeat">Listen and repeat</option>
+              <option value="fading_cues">Fading cues</option>
+              <option value="qa">Q&amp;A</option>
+              <option value="talk">Free talk</option>
+            </select>
+          </div>
+          <div>
+            <label class="label" for="talkTopic">Topic</label>
+            <input id="talkTopic" class="select talk-topic" type="text" maxlength="80" lang="zh-CN" autocomplete="off" autocapitalize="off" placeholder="e.g. 我的周末" aria-describedby="talkTopicHint">
+          </div>
+        </div>
+        <p id="talkTopicHint" class="muted talk-hint">What we'll talk about. Edit it before you start; it is sent with each turn.</p>
+
+        <div id="talkIntro" class="card qa-intro" hidden>
+          <h2>Free talk</h2>
+          <p>Have a short conversation in Chinese about the topic. Tap Record, say a sentence or two, tap Done. I write down what I heard, then reply out loud and in writing, and you answer back.</p>
+          <p class="muted">I only show what you <em>said</em> (speech-to-text). I don't score tones in this mode, and there are no hints. Finish to get takeaways, new words and phrases to try. Nothing from the conversation is stored, except words you choose to save.</p>
+        </div>
+
+        <div id="talkChatWrap" hidden>
+          <div class="row between talk-bar">
+            <span class="muted">Topic: <strong id="talkTopicShown" lang="zh-CN"></strong></span>
+            <button id="btnTalkPinyin" class="chip" type="button" aria-pressed="false">Pinyin</button>
+          </div>
+          <ol id="talkChat" class="talk-chat" role="log" aria-live="polite" aria-label="Conversation"></ol>
+          <p class="muted talk-foot">“What I heard” is only the speech-to-text transcript. It is not tone evidence.</p>
+        </div>
+
+        <div id="talkStatus" class="card status" data-kind="idle">
+          <div class="st st-ready" hidden><span class="st-title">Your turn</span><span class="muted" id="talkReadyHint">Tap Record, say a sentence or two, then tap Done.</span></div>
+          <div class="st st-listening" hidden>
+            <div class="row gap center-v"><span class="rec-dot" aria-hidden="true"></span><span class="st-title rec">Recording</span><span id="talkTimer" class="timer" aria-hidden="true">0:00</span></div>
+            <span class="muted">Speak naturally. Tap Done when you've finished.</span>
+          </div>
+          <div class="st st-processing" hidden><span class="spinner" aria-hidden="true"></span><span class="st-title" id="talkProcTitle">Listening to your turn…</span><span class="muted">The coach replies in a few seconds.</span></div>
+          <div class="st st-paused" hidden><span class="st-title">Paused</span><span class="muted">Tap Resume when you're ready.</span></div>
+          <div class="st st-finishing" hidden><span class="spinner" aria-hidden="true"></span><span class="st-title">Writing your summary…</span></div>
+        </div>
+        <p id="talkNotice" class="notice" role="status" hidden></p>
+
+        <div id="talkError" class="card error" role="alert" hidden>
+          <p id="talkErrorText"></p>
+          <div class="row gap wrap">
+            <button id="btnTalkErrRetry" class="btn primary" type="button">Try again</button>
+            <button id="btnTalkErrSkip" class="btn" type="button">Skip this turn</button>
+          </div>
+        </div>
+
+        <div id="talkSummary" class="card summary" hidden></div>
+      </div>
+      <div class="controlbar">
+        <button id="btnTalkPrimary" class="btn primary big" type="button">Start talking</button>
+        <div class="ctl-row three">
+          <button id="btnTalkPause" class="btn" type="button">Pause</button>
+          <button id="btnTalkSkip" class="btn" type="button">Skip reply</button>
+          <button id="btnTalkFinish" class="btn danger" type="button">Finish</button>
         </div>
       </div>
     </section>

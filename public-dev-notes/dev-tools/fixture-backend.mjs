@@ -10,10 +10,10 @@ import http from "node:http";
 
 const LISTEN = Number(process.argv[2] || 8095), TARGET = Number(process.argv[3] || 8093);
 const NEEDED = 3;
-const mode = { attempt: "issues", drill: "correct", unsupported: false, retell: "", qa: "missing", qaHints: "backend", qaAnswer: "assessment", qaUnsupported: false, qaTranscript: "" };   // retell: "" | "tone_flagged" | "tone_unflagged" | "legacy" (only touches basis:"transcript" assessments)
+const mode = { attempt: "issues", drill: "correct", unsupported: false, retell: "", qa: "missing", qaHints: "backend", qaAnswer: "assessment", qaUnsupported: false, qaTranscript: "", talk: "ok", talkUnsupported: false, talkOpening: "ok", talkSummary: "ok", talkTranscript: "", talkSlow: 0 };   // retell: "" | "tone_flagged" | "tone_unflagged" | "legacy" (only touches basis:"transcript" assessments)
 let words = [];  // {id,text,pinyin,meaning,missCount,correctStreak,needed,lastMissedAt,sourceChunk,status}
-let seq = 0, attemptNo = 0, drillNo = 0;
-const last = { qaChunkText: null, qaFields: [], attemptChunkText: null };   // what the frontend sent (GET /__fixture/last)
+let seq = 0, attemptNo = 0, drillNo = 0, talkNo = 0;
+const last = { qaChunkText: null, qaFields: [], attemptChunkText: null, talkContext: null, talkFields: [], talkAttemptIds: [], talkTurnCalls: 0, talkOpeningBody: null, talkSummaryBody: null, talkSummaryCalls: 0 };   // what the frontend sent (GET /__fixture/last)
 const seen = new Map();   // attemptId -> response body (replay)
 
 const readBody = (req) => new Promise((res) => { const c = []; req.on("data", (d) => c.push(d)); req.on("end", () => res(Buffer.concat(c))); });
@@ -106,6 +106,73 @@ function transformAttempt(body, chunkText, attemptId) {
   return out.join("\n\n") + "\n\n";
 }
 
+// ------------------------------------------------------------------ Free talk (Backend working-tree shape, services/talk.js + routes/talk.js, 28 Oct)
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const sse = (ev, d) => `event: ${ev}\ndata: ${JSON.stringify(d)}\n\n`;
+const TALK_TRANSCRIPTS = ["我周末去公园玩了，天气很好。", "我和朋友一起吃了饺子，很好吃。", "下个周末我想去爬山。"];
+const TALK_REPLIES = [["听起来很不错！", "你在公园里做了什么？"], ["饺子是我最喜欢的。", "你们在哪儿吃的？"], ["爬山很有意思。", "你想去哪座山？"]];
+function wavBuf(ms = 400) { const n = Math.floor(8000 * ms / 1000), b = Buffer.alloc(44 + n * 2); b.write("RIFF", 0); b.writeUInt32LE(36 + n * 2, 4); b.write("WAVEfmt ", 8); b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22); b.writeUInt32LE(8000, 24); b.writeUInt32LE(16000, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34); b.write("data", 36); b.writeUInt32LE(n * 2, 40); return b; }
+const notFound = (res) => json(res, 404, { error: { code: "not_found", message: "Not found" } });
+async function talkRoute(req, res, p) {
+  if (p === "/__fixture/talk.wav") { res.writeHead(200, { "Content-Type": "audio/wav", "Content-Length": wavBuf().length }); return res.end(wavBuf()); }
+  if (mode.talkUnsupported) { await readBody(req); return notFound(res); }
+  if (!(await authed(req))) { await readBody(req); return json(res, 401, { error: { code: "unauthorized", message: "Sign in required." } }); }
+  if (p === "/api/talk/opening") {
+    const b = JSON.parse((await readBody(req)).toString() || "{}"); last.talkOpeningBody = b;
+    if (mode.talkSlow) await sleep(mode.talkSlow);
+    if (mode.talkOpening === "fail") return json(res, 502, { ok: false, error: { code: "opening_generation_failed", message: "Could not produce an opening (opening_failed). Try again." } });
+    return json(res, 200, { ok: true, textZh: `你好！我们聊聊${b.topic || "你的生活"}吧，你最近怎么样？`, pinyin: "nǐ hǎo! wǒ men liáo liáo ba, nǐ zuì jìn zěn me yàng?", textAudio: { url: "/__fixture/talk.wav" }, timings: {} });
+  }
+  if (p === "/api/talk/summary") {
+    const b = JSON.parse((await readBody(req)).toString() || "{}"); last.talkSummaryBody = b; last.talkSummaryCalls++;
+    if (mode.talkSlow) await sleep(mode.talkSlow);
+    if (mode.talkSummary === "error") return json(res, 502, { ok: false, error: { code: "summary_generation_failed", message: "Could not produce a summary (summary_failed). Try again." } });
+    if (mode.talkSummary === "empty") return json(res, 200, { ok: true, takeaways: [], newWords: [], phrasesToTry: [], strengths: [] });
+    return json(res, 200, { ok: true, takeaways: [{ textEn: "You described what you did over the weekend clearly.", textZh: "我周末去了公园。", pinyin: "wǒ zhōu mò qù le gōng yuán." }, { textEn: "You linked two ideas with a reason.", textZh: "天气很好，所以我去了。", pinyin: "tiān qì hěn hǎo, suǒ yǐ wǒ qù le." }],
+      newWords: [{ text: "爬山", pinyin: "pá shān", meaning: "to go hiking", exampleZh: "周末我们去爬山。" }, { text: "饺子", pinyin: "jiǎo zi", meaning: "dumplings", exampleZh: "我喜欢吃饺子。", savedMeaning: mode.talkSummary === "saved" ? "dumplings" : undefined }],
+      phrasesToTry: [{ zh: "我觉得很放松。", pinyin: "wǒ jué de hěn fàng sōng.", en: "I feel very relaxed.", whyEn: "Describes how an activity felt." }], strengths: ["You kept the conversation going with full sentences."], statsDerived: { turns: (b.turns || []).length, userTurns: (b.turns || []).filter((t) => t.role === "user").length, approxCharsSpoken: 20 }, timings: {} });
+  }
+  if (p === "/api/talk/turn") {
+    const buf = await readBody(req); last.talkTurnCalls++;
+    last.talkFields = [...buf.toString("latin1").matchAll(/name="([^"]+)"/g)].map((m) => m[1]);
+    try { last.talkContext = JSON.parse(field(buf, "context")); } catch { last.talkContext = null; }
+    const attemptId = field(buf, "attemptId"); last.talkAttemptIds.push(attemptId);
+    const done = seen.get("talk:" + attemptId);
+    res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", ...(done ? { "X-Attempt-Replayed": "true" } : {}) });
+    if (done) return res.end(done);
+    const n = talkNo++, m = mode.talk;
+    const wait = async (ms = 120) => sleep(ms + (mode.talkSlow || 0) / 4);
+    let out = ""; const w = async (ev, d, ms) => { const chunk = sse(ev, d); out += chunk; res.write(chunk); await wait(ms); };
+    await w("status", { stage: "transcribing" });
+    if (m === "stt_error") { await w("error", { code: "transcription_failed", message: "Could not transcribe your speech.", retryable: true, canSkip: true, stage: "transcribing" }); return res.end(); }
+    if (m === "too_long") { await w("error", { code: "talk_turn_too_long", message: "That turn is too long to coach.", retryable: false, canSkip: true, stage: "transcribing" }); return res.end(); }
+    const gate = m === "gate";
+    const text = mode.talkTranscript || TALK_TRANSCRIPTS[n % TALK_TRANSCRIPTS.length];
+    await w("transcript", { text: gate ? "谢谢观看" : text, sttStatus: gate ? "hallucination" : "ok", hanziCount: gate ? 4 : [...text].length, hasEnglish: false });
+    await w("status", { stage: "coaching" });
+    if (gate) {
+      await w("status", { stage: "coaching", skipped: true, code: "no_speech", message: "Nothing usable was heard." });
+      await w("coach_text", { delta: "我没有听清楚，请再说一遍。", index: 0, role: "gate" }); await w("coach_audio", { url: "/__fixture/talk.wav", index: 0, text: "我没有听清楚，请再说一遍。" });
+      await w("done", { gate: "hallucination", correction: null, correctionStatus: "skipped", suggestedWords: [], replyZh: null, questionZh: null, timings: {}, summary: { coached: false } });
+      seen.set("talk:" + attemptId, out); return res.end();
+    }
+    if (m === "llm_down") { await w("error", { code: "talk_llm_unavailable", message: "The coach could not reply right now (llm_failed). No reply was made up.", retryable: true, canSkip: true, stage: "coaching" }); return res.end(); }
+    const [reply, question] = TALK_REPLIES[n % TALK_REPLIES.length];
+    await w("coach_text", { delta: reply, index: 0, role: "reply" }); await w("coach_audio", { url: "/__fixture/talk.wav", index: 0, text: reply });
+    let idx = 1, correction = null, suggestedWords = [];
+    if (m === "correction") {
+      correction = { kind: "word_choice", quote: "玩了", betterZh: "逛了", explainZh: "这里换个词更自然。", pinyin: "guàng le" };
+      await w("coach_text", { delta: correction.explainZh, index: idx, role: "correction", caption: "逛了 guàng le" }); await w("coach_audio", { url: "/__fixture/talk.wav", index: idx++, text: correction.explainZh });
+      await w("coach_text", { delta: "可以这样说：逛了", index: idx, role: "correction_model", caption: "逛了 guàng le" }); await w("coach_audio", { url: "/__fixture/talk.wav", index: idx++, text: "可以这样说：逛了" });
+      suggestedWords = [{ text: "逛公园", pinyin: "guàng gōng yuán", meaning: "to stroll around a park", reason: "word_choice" }];
+    }
+    await w("coach_text", { delta: question, index: idx, role: "question" }); await w("coach_audio", { url: "/__fixture/talk.wav", index: idx, text: question });
+    await w("done", { correction, correctionStatus: correction ? "ok" : "none", suggestedWords, vocabHints: [], replyZh: reply, questionZh: question, timings: {}, summary: { coached: true, tone: "skipped" } });
+    seen.set("talk:" + attemptId, out); return res.end();
+  }
+  return notFound(res);
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://x");
   const p = url.pathname;
@@ -113,11 +180,12 @@ const server = http.createServer(async (req, res) => {
     if (p === "/__fixture/last") return json(res, 200, last);
     if (p === "/__fixture/mode" && req.method === "POST") {
       const b = JSON.parse((await readBody(req)).toString() || "{}");
-      if (b.reset) { words = []; seq = 0; attemptNo = 0; drillNo = 0; seen.clear(); }
-      for (const k of ["attempt", "drill", "unsupported", "retell", "qa", "qaHints", "qaAnswer", "qaUnsupported", "qaTranscript"]) if (b[k] !== undefined) mode[k] = b[k];
+      if (b.reset) { words = []; seq = 0; attemptNo = 0; drillNo = 0; seen.clear(); talkNo = 0; Object.assign(last, { talkContext: null, talkFields: [], talkAttemptIds: [], talkTurnCalls: 0, talkOpeningBody: null, talkSummaryBody: null, talkSummaryCalls: 0 }); }
+      for (const k of ["attempt", "drill", "unsupported", "retell", "qa", "qaHints", "qaAnswer", "qaUnsupported", "qaTranscript", "talk", "talkUnsupported", "talkOpening", "talkSummary", "talkTranscript", "talkSlow"]) if (b[k] !== undefined) mode[k] = b[k];
       if (Array.isArray(b.seed)) for (const t of b.seed) { const w = addMissed(t, `例句：${t}很重要。`); w.missCount = 2; }
       return json(res, 200, { mode, words: words.length });
     }
+    if (p.startsWith("/api/talk/") || p === "/__fixture/talk.wav") return talkRoute(req, res, p);
     const fx = p.startsWith("/api/words/missed") || p.startsWith("/api/drill/");
     if (fx && !(await authed(req))) return json(res, 401, { error: { code: "unauthorized", message: "Sign in required." } });
     if (fx && mode.unsupported) return json(res, 404, { error: { code: "not_found", message: "Not found" } });

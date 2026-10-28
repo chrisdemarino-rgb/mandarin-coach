@@ -18,6 +18,7 @@ export const FADE_LABELS = {
   4: "Level 4 · from memory",
 };
 
+const TALK_PREF = "free_talk";   // practiceMode value in the server pref enum (server/routes/prefs.js)
 export function createSession() {
   const store = createStore();
   const machine = createMachine();
@@ -135,8 +136,20 @@ export function createSession() {
     on = !!on;
     if (!!store.settings.qaMode === on) return;
     if (on && S.sessionActive && machine.state !== "paused") S.pause("Paused for Q&A. Tap Resume to carry on with your script.");
-    store.setSettings({ qaMode: on }, true);
-    S.pushPrefs({ practiceMode: on ? "qa" : store.settings.practiceMode });
+    store.setSettings({ qaMode: on, ...(on ? { talkMode: false } : {}) }, true);
+    if (on || !store.settings.talkMode) S.pushPrefs({ practiceMode: on ? "qa" : store.settings.practiceMode });
+    S.emit();
+  };
+  /** Free talk is a Practice mode too (own screen, own endpoints /api/talk/*). Same scheme as Q&A: local flag `talkMode`, the real practiceMode is kept for /api/attempt.
+   *  The server pref `practiceMode:"free_talk"` (Backend working tree, prefs.js) is pushed QUIETLY: until the Backend's /api/prefs enum accepts it the rejection is swallowed (no error banner), the
+   *  server is told the real mode instead (so it never keeps a stale "qa"), and Free talk simply stays a per-device choice. */
+  S.setTalkMode = (on) => {
+    on = !!on;
+    if (!!store.settings.talkMode === on) return;
+    if (on && S.sessionActive && machine.state !== "paused") S.pause("Paused for Free talk. Tap Resume to carry on with your script.");
+    store.setSettings({ talkMode: on, ...(on ? { qaMode: false } : {}) }, true);
+    if (on) api.putPrefs({ practiceMode: TALK_PREF }).then(() => { S.talkPrefSynced = true; }).catch((e) => { S.talkPrefSynced = false; if (!e.auth) api.putPrefs({ practiceMode: store.settings.practiceMode }).catch(() => {}); });
+    else if (!store.settings.qaMode) S.pushPrefs({ practiceMode: store.settings.practiceMode });
     S.emit();
   };
   S.setPracticeMode = (mode) => {
@@ -174,8 +187,9 @@ export function createSession() {
     if (!p) return;
     const patch = {};
     for (const k of ["chunkMode", "assessMode", "practiceMode", "voice", "speed"]) if (p[k] !== undefined && p[k] !== null) patch[k] = p[k];
-    if (patch.practiceMode === "qa") { delete patch.practiceMode; patch.qaMode = true; }   // never let "qa" become the practiceMode that /api/attempt is sent
-    else if (patch.practiceMode !== undefined) patch.qaMode = false;
+    if (patch.practiceMode === "qa") { delete patch.practiceMode; patch.qaMode = true; patch.talkMode = false; }   // never let "qa" become the practiceMode that /api/attempt is sent
+    else if (patch.practiceMode === "free_talk" || patch.practiceMode === "talk") { delete patch.practiceMode; patch.talkMode = true; patch.qaMode = false; }   // same for "talk"
+    else if (patch.practiceMode !== undefined) { patch.qaMode = false; patch.talkMode = false; }
     store.setSettings(patch, true);
     if (S.parsed) S.rebuild(S.chunk ? S.chunk.sentenceStart : store.progress.sentenceIndex || 0);
   };
@@ -661,8 +675,8 @@ export function createSession() {
 
   /* ------------------------------------------------------------------ saved words */
   S.loadWords = async () => { try { S.words = await api.words.list(); S.words = Array.isArray(S.words) ? S.words : (S.words.words || []); S.wordsLoaded = true; } catch (e) { S.wordsError = e.message; } S.emit(); };
-  S.saveWord = async ({ text, pinyin = "", meaning = "" }) => {
-    const sourceChunk = S.piece ? S.piece.spoken : S.chunk ? S.chunk.spoken || "" : "";
+  S.saveWord = async ({ text, pinyin = "", meaning = "", sourceChunk: given }) => {
+    const sourceChunk = typeof given === "string" ? given : S.piece ? S.piece.spoken : S.chunk ? S.chunk.spoken || "" : "";
     try { await api.words.add({ text, pinyin, meaning, sourceChunk: sourceChunk.slice(0, 200) }); S.saveMsg = `Saved “${text}”.`; await S.loadWords(); }
     catch (e) { S.saveMsg = e.message; S.emit(); }
   };

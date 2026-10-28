@@ -438,3 +438,43 @@ body[data-view="qa"] #view-practice { display: none; }
 .flag.wc .cx { flex: 1 1 100%; color: var(--muted); font-size: 14px; }
 .flag.wc .btn { margin-left: auto; }
 .lg-w-sub .hl, .lg-w-missed .hl { padding: 0 3px; }
+
+/* ---- Free talk (own screen, like Q&A) ---- */
+body[data-view="talk"] #view-talk { display: flex; padding: 0; gap: 0; overflow: hidden; }
+body[data-view="talk"] #view-practice { display: none; }
+.talk-topic { width: 100%; font-size: 20px; }
+.talk-hint, .talk-foot { margin: 4px 0; font-size: 14px; }
+.talk-bar { gap: 10px; margin: 6px 0; }
+.talk-chat { list-style: none; margin: 6px 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.turn { max-width: 94%; padding: 10px 12px; border-radius: 16px; border: 2px solid var(--line); background: var(--card); }
+.turn.user { align-self: flex-end; border-color: var(--accent); background: var(--bg); }
+.turn.coach { align-self: flex-start; }
+.turn .who { font-size: 13px; font-weight: 700; margin-bottom: 2px; }
+.turn-text { font-size: 24px; line-height: 1.5; margin: 2px 0; overflow-wrap: anywhere; }
+.turn.pending { opacity: .85; }
+.turn-py { font-size: 17px; margin: 2px 0; color: var(--text); }
+.turn-py.muted { font-size: 14px; }
+.turn-acoustic { margin: 4px 0; padding-left: 18px; font-size: 15px; }
+.turn-actions { margin-top: 6px; display: flex; gap: 8px; }
+.talk-chat:not([data-pinyin="1"]) .turn-py { display: none; }
+.talk-list { margin: 4px 0 10px; padding-left: 20px; }
+.talk-list li { margin: 4px 0; font-size: 18px; }
+.talk-words, .talk-phrases { list-style: none; padding: 0; }
+.talk-phrases li { display: flex; flex-direction: column; border-bottom: 1px solid var(--line); padding: 6px 0; }
+.talk-phrases .w, .talk-words .w { font-size: 24px; }
+.talk-words .sw { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.talk-words .sw .btn { margin-left: auto; }
+@media (min-width: 900px) {
+  #view-talk { grid-column: 2; grid-row: 1; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--bg); }
+  body[data-talk="1"][data-view="script"] #view-talk { display: flex; padding: 0; gap: 0; }
+  body[data-talk="1"][data-view="script"] #view-practice, body[data-talk="1"][data-view="saved"] #view-talk, body[data-talk="1"][data-view="settings"] #view-talk { display: none; }
+}
+.turn-tip { margin-top: 8px; padding: 8px 10px; border-left: 4px solid var(--ok); background: var(--ok-bg); border-radius: 8px; color: var(--text); }
+.tip-h { font-size: 13px; font-weight: 700; margin: 4px 0; }
+.tip-line { margin: 4px 0; font-size: 20px; }
+.turn-tip .talk-words { margin: 4px 0; }
+.talk-words .ex, .talk-phrases .muted { font-size: 15px; flex-basis: 100%; }
+.talk-eg { font-weight: 700; }
+.talk-list .py, .talk-words .py, .turn-tip .py { font-size: 15px; color: var(--muted); }
+/* Free talk topic is a text field, not a dropdown: no select arrow */
+input.talk-topic { background-image: none; padding-right: 12px; }

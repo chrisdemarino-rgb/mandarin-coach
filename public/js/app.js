@@ -13,12 +13,15 @@ import { initDrillUI } from "./ui/drill.js";
 import { isPass } from "./assess.js";
 import { createQa } from "./qa.js";
 import { initQaUI } from "./ui/qa.js";
+import { createTalk } from "./talk.js";
+import { initTalkUI } from "./ui/talk.js";
 import { createHearMine } from "./hear-mine.js";
 
 const S = createSession();
 const D = createDrill(S);
 const Q = createQa(S);
-window.__coach = { S, D, Q, api }; // debugging / tests
+const T = createTalk(S);
+window.__coach = { S, D, Q, T, api }; // debugging / tests
 const store = S.store;
 
 let peek = false, mockSeen = false, authed = false, booted = false;
@@ -28,10 +31,12 @@ let rafId = 0;
 /* ---------------- views ---------------- */
 function setView(v) {
   if (v === "practice" && store.settings.qaMode) v = "qa";   // Q&A is a practice mode with its own screen
+  else if (v === "practice" && store.settings.talkMode) v = "talk";   // so is Free talk
   if (v !== "drill" && document.body.dataset.view === "drill") D.leave();   // leaving the drill releases the mic and stops audio
   if (v !== "qa" && document.body.dataset.view === "qa") Q.leave();         // same for Q&A
+  if (v !== "talk" && document.body.dataset.view === "talk") T.leave();     // and Free talk (the conversation is forgotten)
   document.body.dataset.view = v;
-  const tabView = v === "drill" ? "saved" : v === "qa" ? "practice" : v;   // the drill lives under the Saved tab
+  const tabView = v === "drill" ? "saved" : v === "qa" || v === "talk" ? "practice" : v;   // the drill lives under the Saved tab
   $$(".tab").forEach((t) => (t.getAttribute("data-view") === tabView ? t.setAttribute("aria-current", "page") : t.removeAttribute("aria-current")));
   if (v === "saved") { S.loadWords(); S.loadMissed(); }
 }
@@ -124,16 +129,18 @@ $$(".js-chunk-mode").forEach((sel) => {
   sel.value = store.settings.chunkMode;
   sel.addEventListener("change", () => S.setChunkMode(sel.value));
 });
-const modeValue = () => (store.settings.qaMode ? "qa" : store.settings.practiceMode);
+const modeValue = () => (store.settings.qaMode ? "qa" : store.settings.talkMode ? "talk" : store.settings.practiceMode);
 function pickMode(v) {
-  if (v === "qa") { S.setQaMode(true); setView("qa"); }
-  else { const wasQa = !!store.settings.qaMode; S.setQaMode(false); S.setPracticeMode(v); if (wasQa) setView("practice"); }
+  if (v === "qa") { S.setQaMode(true); S.setTalkMode(false); setView("qa"); }
+  else if (v === "talk") { S.setTalkMode(true); S.setQaMode(false); setView("talk"); }
+  else { const was = !!store.settings.qaMode || !!store.settings.talkMode; S.setQaMode(false); S.setTalkMode(false); S.setPracticeMode(v); if (was) setView("practice"); }
   syncModeSelects();
 }
-function syncModeSelects() { const v = modeValue(); ["#practiceMode", "#qaModeSelect"].forEach((id) => { if ($(id).value !== v) $(id).value = v; }); document.body.dataset.qa = store.settings.qaMode ? "1" : ""; }
+function syncModeSelects() { const v = modeValue(); ["#practiceMode", "#qaModeSelect", "#talkModeSelect"].forEach((id) => { if ($(id).value !== v) $(id).value = v; }); document.body.dataset.qa = store.settings.qaMode ? "1" : ""; document.body.dataset.talk = store.settings.talkMode ? "1" : ""; }
 syncModeSelects();
 $("#practiceMode").addEventListener("change", (e) => pickMode(e.target.value));
 $("#qaModeSelect").addEventListener("change", (e) => pickMode(e.target.value));
+$("#talkModeSelect").addEventListener("change", (e) => pickMode(e.target.value));
 const f = { assess: $("#setAssess"), rate: $("#setRate"), rateOut: $("#setRateOut"), voice: $("#setVoice"), pinyin: $("#setPinyin"), fb: $("#setFeedback"), auto: $("#setAutoCoach") };
 function loadSettingsForm() {
   const s = store.settings;
@@ -161,6 +168,7 @@ $("#btnTestConn").addEventListener("click", async () => {
 const resultView = createResultView({ onSave: (w) => S.saveWord(w).then(() => toast(S.saveMsg)) });
 initSaved(S, { onDrill: (wordId) => { setView("drill"); D.start(wordId ? { wordId } : {}); } });   // D.start runs unlock+arm inside this tap
 initDrillUI(D, S, { onLeave: () => setView("saved") });
+initTalkUI(T, S, { onSave: (w) => S.saveWord(w).then(() => { toast(S.saveMsg); return /^Saved/.test(S.saveMsg || ""); }), onLeave: () => { S.setTalkMode(false); syncModeSelects(); setView("practice"); } });
 initQaUI(Q, S, { onSave: (w) => S.saveWord(w).then(() => toast(S.saveMsg)), onLeave: () => { S.setQaMode(false); syncModeSelects(); setView("practice"); } });
 
 /* ---------------- controls ---------------- */

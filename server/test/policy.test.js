@@ -20,8 +20,8 @@ const syl = (i, { tone = [1, 1, 90, 'no_correction'] } = {}) => ({ index: i, cha
 const ok = (syllables, o = {}) => ({ status: 'ok', engine: 'x', mock: false, overall: 90, scores: { overall: 90, pronunciation: 90 }, syllables, words: [], ...o });
 
 test('constants are named in config and exposed on cfg', () => {
-  assert.equal(loadConfig({ NODE_ENV: 'test' }).policy, P);
-  for (const k of ['LOW_MATCH_OVERALL_MAX', 'LOW_MATCH_PRONUNCIATION_MAX', 'TONE_REVIEW_MAX_SCORE', 'TONE_MAX_CLAIMS', 'TONE_DENSITY_MAX_RATIO', 'TONE_DENSITY_MIN_SYLLABLES']) assert.equal(typeof P[k], 'number', k);
+  assert.deepEqual({ ...loadConfig({ NODE_ENV: 'test' }).policy }, { ...P });
+  for (const k of ['LOW_MATCH_OVERALL_MAX', 'LOW_MATCH_PRONUNCIATION_MAX', 'TONE_REVIEW_MAX_SCORE', 'TONE_MAX_CLAIMS', 'TONE_DENSITY_MAX_RATIO', 'TONE_DENSITY_MIN_SYLLABLES', 'ACOUSTIC_MISSING_WORD_MAX', 'ACOUSTIC_INITIAL_ABSENT_MAX', 'STT_MIN_COVERAGE', 'STT_WAIT_MS', 'LONG_PAUSE_MS', 'SAVE_LOW_SCORE_WORD_MAX']) assert.equal(typeof P[k], 'number', k);
   assert.throws(() => { 'use strict'; P.TONE_MAX_CLAIMS = 9; }); // frozen
 });
 

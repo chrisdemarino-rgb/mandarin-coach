@@ -29,7 +29,7 @@ export const XIEXIE_WRONG_TONE = {
       { dimension: 'initial', expected: 'x', heard: 'x', score: 91.0, decision: 'no_correction' },
       { dimension: 'final', expected: 'ie', heard: 'ie', score: 70.2, decision: 'uncertain' },
       { dimension: 'tone', expected: '4', heard: '4', score: 93.0, decision: 'no_correction' }] },
-    { text: '谢', pinyin: 'xie4', score: 55.0, start_ms: 200, end_ms: 420, decision: null, units: [
+    { text: '谢', pinyin: 'xie4', score: 78.0, start_ms: 200, end_ms: 420, decision: null, units: [
       { dimension: 'initial', expected: 'x', heard: 'x', score: 90.0, decision: 'no_correction' },
       { dimension: 'final', expected: 'ie', heard: 'ie', score: 88.0, decision: 'no_correction' },
       { dimension: 'tone', expected: '4', heard: '2', score: 20.1, decision: 'review' }] },

@@ -1,0 +1,8 @@
+{
+ "sample": "06-jintian-tianqi-correct",
+ "model": "gpt-4o-transcribe",
+ "language": "zh",
+ "prompt": null,
+ "transcript": "今天天氣很好。",
+ "sttMs": 521
+}

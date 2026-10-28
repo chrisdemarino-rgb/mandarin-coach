@@ -7,14 +7,27 @@ import path from 'node:path';
 import { APP_ROOT, ASSESSMENT_POLICY as P } from '../config.js';
 import { applyPolicy } from '../engines/assessment/policy.js';
 import { deriveFacts } from '../engines/assessment/derive.js';
+import { analyzeWords } from '../engines/assessment/words.js';
 
 const dir = path.join(APP_ROOT, 'server', 'test-results');
 const fx = path.join(APP_ROOT, 'server', 'test', 'fixtures', 'real-clips');
 const labels = JSON.parse(fs.readFileSync(path.join(fx, 'labels.json'), 'utf8'));
-const names = Object.keys(labels).filter((k) => !k.startsWith('_'));
+const names = Object.keys(labels).filter((k) => !k.startsWith('_') && !labels[k].omittedWords); // tone report: the 8 original clips; omission clips (09, 10) have their own section
+const omitNames = Object.keys(labels).filter((k) => labels[k].omittedWords);
 const clip = (n) => JSON.parse(fs.readFileSync(path.join(fx, `${n}.json`), 'utf8'));
+const sttOf = (n) => { try { return JSON.parse(fs.readFileSync(path.join(fx, '..', 'stt', `${n}.json`), 'utf8')).transcript; } catch { return null; } };
 const f1 = (x) => (x == null ? '–' : String(x));
 
+// ---- missing / skipped words (acoustic evidence from per-word scores x STT transcript)
+const wordRows = []; const omitRows = [];
+for (const n of [...names.filter((k) => labels[k].correct && !labels[k].mismatch && !labels[k].noSpeech), ...omitNames]) {
+  const { referenceText, result: raw } = clip(n); const pol = applyPolicy(structuredClone(raw)); const T = sttOf(n);
+  const withStt = analyzeWords({ chunkText: referenceText, assessment: pol, transcript: T, stt: { status: T == null ? 'unavailable' : 'ok' } });
+  const acoustic = analyzeWords({ chunkText: referenceText, assessment: pol, transcript: null, stt: { status: 'unavailable' } });
+  const fmt = (r) => r.wordStatus.filter((w) => w.status !== 'ok' && w.reason !== 'tone' && w.reason !== 'initial' && w.reason !== 'final').map((w) => `${w.text}:${w.status}/${w.confidence}`).join(' ') || '–';
+  const labelled = labels[n].omittedWords ? `omitted ${labels[n].omittedWords.join('')}` : 'complete';
+  omitRows.push(`| ${n} | ${labelled} | ${raw.words.map((w) => w.text + ' ' + w.score).join(', ')} | ${raw.syllables.map((x) => x.initial.score ?? '–').join(', ')} | ${JSON.stringify(T)} | ${fmt(acoustic)} | ${fmt(withStt)} | ${withStt.facts.canPraise ? 'yes' : 'no'} |`);
+}
 let before = { TP: 0, FP: 0 }; let after = { TP: 0, FP: 0 };
 let correctSylls = 0; let fpBeforeSylls = 0; let fpAfterSylls = 0;
 const correctClips = []; const sections = []; const gateRows = [];
@@ -128,6 +141,17 @@ Remaining false flag: clip 02 (谢#2, score 60). **True positives lost: 0 of 3**
 
 ## Per-clip tables
 ${sections.join('')}
+## Missing / skipped / wrong words (words.js)
+Evidence per clip: TonePerfect per-word score (\`words[].score\`), per-syllable initial score, and the real \`gpt-4o-transcribe\` transcript (\`language: zh\`, no reference text in the prompt) aligned to the reference (Needleman-Wunsch on pinyin). Clips 09 and 10 were made by trimming clip 04 / 06 with ffmpeg (one real TonePerfect call each; cached).
+| clip | what was said | word scores | initial scores | STT transcript | acoustic only | acoustic + STT | praise allowed |
+|---|---|---|---|---|---|---|---|
+${omitRows.join('\n')}
+
+Thresholds (constants in \`ASSESSMENT_POLICY\`): a word is an **acoustic candidate** when its word score < \`ACOUSTIC_MISSING_WORD_MAX\` (${P.ACOUSTIC_MISSING_WORD_MAX}) or its initial score < \`ACOUSTIC_INITIAL_ABSENT_MAX\` (${P.ACOUSTIC_INITIAL_ABSENT_MAX}). Rationale, from this data: initials of genuinely skipped syllables scored 1.1–5.4 (3.3 in 09, 1.1 / 5.4 in 10) versus >= 57.3 on every spoken syllable (the lowest, 57.3, is the 喜 of the wrong-tone take), so 30 sits in a wide gap; word scores of skipped words were 51.1–60.9 versus >= 62.9 for words that were said (the narrow 2-point margin: 中 in clip 05 scored 62.9), so 65 is deliberately just above the best skipped score and is only used as a *candidate* filter, never as proof.
+Evidence combination: STT says missing + acoustic candidate => **missed / high**; STT says missing alone => **missed / medium**; acoustic candidate alone (no STT, STT timeout/failure, or the transcript contains the word) => **uncertain / low** (never "missed"); the transcript is ignored when its coverage of the reference is < \`STT_MIN_COVERAGE\` (${P.STT_MIN_COVERAGE}; it hallucinated "初来乍到。" on room noise). A word flagged by any single source blocks plain praise.
+STT findings (real transcripts, 10 clips): returns **traditional** characters sometimes (謝謝, 今天天氣) → compared at toneless-pinyin level; **autocorrects wrong tones** (clip 05 came back as perfect text) → the transcript is never used for tone claims; hallucinates on noise (07) and returns a fluent *different* sentence for a wrong-sentence clip (08 → "你好", correct) ; latency 0.4–1.0 s.
+Limits: n = 10 clips, one speaker, thresholds chosen inside the observed gaps (not validated on other speakers/phones/rooms); only 2 omission samples; a skipped *neutral-tone / weak* syllable may score low without being skipped (acoustic-only stays hedged for that reason); insertions are reported in \`facts.insertedText\` but do not block praise; clip 10's 很 (score 56.7, initial 1.1) is almost certainly also unspoken but the transcript contained it, so it is only "uncertain" (STT hallucinated/completed it) — an honest example of the single-source limit.
+
 ## What this does NOT tell us
 - Whether the false-flag rate on correct speech is 5% or 40%: after policy it is 1 flag in ${correctSylls} syllables on one speaker.
 - Whether real mild tone errors (scores 70–80) exist and are being hidden.

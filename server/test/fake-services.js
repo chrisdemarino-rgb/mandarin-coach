@@ -3,7 +3,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 
 export async function startFakeServices() {
-  const state = { chatScript: null, chatStatus: 200, sttText: '我们今天练习中文。', sttStatus: 200, ttsStatus: 200, azureStatus: 200, chatDelayMs: 0,
+  const state = { chatScript: null, chatStatus: 200, sttText: '我们今天练习中文。', sttDelayMs: 0, sttStatus: 200, ttsStatus: 200, azureStatus: 200, chatDelayMs: 0,
     requests: [], jsonCalls: 0 };
   const server = http.createServer(async (req, res) => {
     const chunks = []; for await (const c of req) chunks.push(c);
@@ -26,6 +26,7 @@ export async function startFakeServices() {
       res.write('data: [DONE]\n\n'); return res.end();
     }
     if (req.url === '/v1/audio/transcriptions') {
+      if (state.sttDelayMs) await new Promise((r) => setTimeout(r, state.sttDelayMs));
       if (state.sttStatus !== 200) { res.writeHead(state.sttStatus); return res.end('{}'); }
       res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ text: state.sttText }));
     }
@@ -43,6 +44,6 @@ export async function startFakeServices() {
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const origin = `http://127.0.0.1:${server.address().port}`;
-  return { origin, openaiBase: `${origin}/v1`, azureBase: origin, state, reset() { state.requests.length = 0; state.jsonCalls = 0; state.chatStatus = 200; state.sttStatus = 200; state.ttsStatus = 200; state.azureStatus = 200; state.chatDelayMs = 0; state.sttText = '我们今天练习中文。'; },
+  return { origin, openaiBase: `${origin}/v1`, azureBase: origin, state, reset() { state.requests.length = 0; state.jsonCalls = 0; state.chatStatus = 200; state.sttStatus = 200; state.ttsStatus = 200; state.azureStatus = 200; state.chatDelayMs = 0; state.sttText = '我们今天练习中文。'; state.sttDelayMs = 0; },
     close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(() => r()); }) };
 }

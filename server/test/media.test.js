@@ -102,12 +102,14 @@ test('splitSentences + validateCorrection edge cases', () => {
   assert.deepEqual(splitSentences('很好。再来一次！好吗？'), ['很好。', '再来一次！', '好吗？']);
   const facts = { confirmedToneErrors: [{ ref: 'tone:0', index: 0, char: '妈', expectedTone: 1, heardTone: 3 }], uncertain: [] };
   const ctx = { chunkText: '妈妈', facts, transcript: null, assessMode: 'close' };
-  assert.equal(validateCorrection({ kind: 'wording', explanationZh: 'x' }, ctx).dropped, 'no_transcript');
+  assert.equal(validateCorrection({ kind: 'wording', explanationZh: 'x' }, ctx).dropped, 'code_owned'); // close mode: missing/wrong words come from code
+  assert.equal(validateCorrection({ kind: 'wording', explanationZh: 'x' }, { ...ctx, assessMode: 'retell' }).dropped, 'no_transcript');
+  assert.equal(validateCorrection({ kind: 'missing', explanationZh: 'x' }, ctx).dropped, 'code_owned');
   assert.equal(validateCorrection({ kind: 'nonsense' }, ctx).dropped, 'unknown_kind');
   assert.equal(validateCorrection(null, ctx).dropped, 'not_an_object');
   const ok = validateCorrection({ kind: 'tone', targetText: '妈', explanationZh: '“妈”应该读第一声，你读成了第三声。', modelText: '妈妈', factRef: 'tone:0' }, ctx);
   assert.equal(ok.correction.source, 'llm');
   const retellWording = validateCorrection({ kind: 'wording', explanationZh: '换了说法。' }, { ...ctx, transcript: '妈', assessMode: 'retell' });
   assert.equal(retellWording.dropped, 'wording_not_error_in_retell');
-  assert.equal(validateCorrection({ kind: 'omission', explanationZh: '这个字读第三声。' }, { ...ctx, transcript: '妈' }).dropped, 'tone_claim_without_evidence');
+  assert.equal(validateCorrection({ kind: 'omission', explanationZh: '这个字读第三声。' }, { ...ctx, transcript: '妈', assessMode: 'retell' }).dropped, 'tone_claim_without_evidence');
 });

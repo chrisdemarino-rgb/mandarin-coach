@@ -1,0 +1,8 @@
+{
+ "sample": "05-xihuan-zhongwen-wrong-tone",
+ "model": "gpt-4o-transcribe",
+ "language": "zh",
+ "prompt": null,
+ "transcript": "我喜欢学中文。",
+ "sttMs": 420
+}

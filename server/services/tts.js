@@ -31,8 +31,16 @@ export function createTts(cfg, openai) {
     return Buffer.from(await res.arrayBuffer());
   }
 
+  const warmed = new Set();
   return {
     provider, // 'azure' | 'openai' | null
+    /** Pre-synthesize fixed phrases for this voice/speed so their audio is a cache hit later. Fire-and-forget, once per (voice,speed). */
+    warm({ phrases, voice, speed = 1 }) {
+      if (!provider) return Promise.resolve();
+      const k = `${voice}|${speed}`; if (warmed.has(k)) return Promise.resolve(); warmed.add(k);
+      const todo = [...phrases]; const worker = async () => { for (let t; (t = todo.shift());) { try { await this.synthesize({ text: t, voice, speed }); } catch { warmed.delete(k); return; } } };
+      return Promise.all([worker(), worker(), worker()]).then(() => {});
+    },
     available: !!provider,
     /** -> { buf: Buffer(mp3), provider, cached } */
     async synthesize({ text, voice, speed = 1, signal }) {

@@ -49,3 +49,13 @@ with `error.code` = the vendor reason (e.g. `no_speech`, `different_content`), n
 - **Tone claims:** `review` is necessary, not sufficient: tone.score <= 70 and heard != expected; max 2 (lowest score first); if > 40% of a >= 4-syllable chunk still flagged => demote all. Demoted => `uncertain`, `heard:null`, `demotedFrom:'review'`, `demotedReason`.
 - Result gains `matchesText`, `gate`, `policy` (and `gateReasons`/`gateMessage` when gated). `deriveFacts` never exposes `heard` for uncertain items.
 - Evidence: `test-results/VALIDATION.md` (8 real clips, 1 speaker: indicative only).
+
+## Words layer (`words.js`, runs after the policy, in `/api/attempt` and `/api/drill/attempt`)
+- Input: the policy-applied normalized assessment (per-character `syllables`/`words` with `score`, `initial.score`), the chunk text, and an optional STT transcript (`gpt-4o-transcribe`, `language:zh`, prompt without the reference). Output: `wordStatus[]` (per character, code-point offsets) and `facts` additions `missingWords`, `substitutedWords`, `unclearWords`, `insertedText`, `notableGaps`, `stt{status,ms,coverage,reliable}`, `completeness`, `canPraise`.
+- Transcript alignment: Needleman-Wunsch on toneless pinyin (pinyin-pro) so traditional/simplified, homophone variants and digits/number words compare equal; punctuation ignored; reference words via `Intl.Segmenter('zh')`.
+- Evidence: acoustic candidate = word score < `ACOUSTIC_MISSING_WORD_MAX` or initial score < `ACOUSTIC_INITIAL_ABSENT_MAX`. STT missing/different + candidate = missed|substituted/high; STT only = medium; candidate only = `uncertain`/low (never "missed"). Transcript ignored when coverage < `STT_MIN_COVERAGE`. A confirmed tone error (policy `review`) becomes `wrong/tone`.
+- **The transcript is never used for tone claims** (it autocorrects tones; clip 05 returned perfect text). Tone facts come only from `confirmedToneErrors` as before.
+- Engines remain vendor-agnostic: the layer needs only per-char word/syllable scores and initial scores; missing initial scores simply disable that criterion.
+- Gate composes: a `low_match` result gets `wordStatus:[]`, `canPraise:false`, `completeness:'unknown'`, and no word claims.
+- Evidence and limits: `test-results/VALIDATION.md` ("Missing / skipped / wrong words").
+

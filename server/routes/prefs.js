@@ -3,7 +3,7 @@ import { Router } from 'express';
 const ENUMS = {
   chunkMode: ['sentence', 'four', 'paragraph'],
   assessMode: ['close', 'retell'],
-  practiceMode: ['listen_repeat', 'fading_cues'], // later: free_talk, qa, trouble_word (add here when built)
+  practiceMode: ['listen_repeat', 'fading_cues', 'trouble_word'], // trouble_word = the missed-word drill screen (its own endpoints: /api/drill/*)
 };
 const bad = (res, message) => res.status(400).json({ ok: false, error: { code: 'invalid_prefs', message } });
 

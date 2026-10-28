@@ -1,0 +1,8 @@
+{
+ "sample": "10-half-only-jintian-tian",
+ "model": "gpt-4o-transcribe",
+ "language": "zh",
+ "prompt": null,
+ "transcript": "今天天氣很",
+ "sttMs": 412
+}

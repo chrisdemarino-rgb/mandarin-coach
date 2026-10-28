@@ -15,7 +15,7 @@ after(async () => { await tp.close(); await svc.close(); });
 beforeEach(() => { tp.reset(); svc.reset(); svc.state.chatScript = null; });
 
 const envBase = () => ({ TONEPERFECT_API_KEY: TP_KEY, TONEPERFECT_BASE_URL: tp.baseUrl, ASSESSMENT_ENGINE: 'toneperfect' });
-const envOai = () => ({ ...envBase(), OPENAI_API_KEY: OAI_KEY, OPENAI_BASE_URL: svc.openaiBase });
+const envOai = () => ({ ...envBase(), OPENAI_API_KEY: OAI_KEY, OPENAI_BASE_URL: svc.openaiBase, COACH_LLM_TONE: '1' }); // the LLM-phrased tone path is opt-in (latency); default path is tested in missed.test.js
 async function server(env, opts) { const t = await startTestServer(env, opts); await t.login(); return t; }
 const ev = (r, name) => r.events.filter((e) => e.event === name).map((e) => e.data);
 const names = (r) => r.events.map((e) => e.event);
@@ -57,7 +57,7 @@ test('happy path: SSE order, assessment payload, streamed grounded coaching, per
     const chat = svc.state.requests.find((x) => x.url === '/v1/chat/completions');
     assert.equal(chat.headers.authorization, `Bearer ${OAI_KEY}`);
     const userMsg = JSON.parse(chat.json.messages[1].content);
-    assert.deepEqual(Object.keys(userMsg).sort(), ['basis', 'chunkText', 'facts', 'lowConfidence', 'mode', 'transcript']);
+    assert.deepEqual(Object.keys(userMsg).sort(), ['basis', 'chunkText', 'facts', 'lowConfidence', 'mode']); // no transcript for the LLM in close mode: it is only used by code for word diffs
     // nothing secret on the wire back to the client
     for (const k of [TP_KEY, OAI_KEY]) assert.ok(!r.text.includes(k));
   } finally { await t.close(); }
@@ -234,24 +234,23 @@ test('RETELL error paths: no STT key, empty transcript, too long, STT failure =>
   } finally { await t.close(); }
 });
 
-test('CLOSE + fading_cues: assess and STT run in parallel; transcript is labelled; STT failure is non-fatal; listen_repeat skips STT', async () => {
-  svc.state.chatScript = llm({ praiseZh: '好。', corrections: [{ kind: 'omission', targetText: '谢', explanationZh: '漏了一个字。', modelText: '谢谢', factRef: null }], nextPromptZh: '继续。' });
-  svc.state.sttText = '谢';
+test('CLOSE: STT ALWAYS runs alongside the assessment (listen_repeat too); transcript labelled; STT failure/timeout is non-fatal and stated in facts', async () => {
+  svc.state.chatScript = llm({ praiseZh: '好。', corrections: [], nextPromptZh: '继续。' });
+  svc.state.sttText = '谢谢';
   const t = await server(envOai());
+  const sttCalls = () => svc.state.requests.filter((x) => x.url === '/v1/audio/transcriptions').length;
   try {
-    let r = await postAttempt(t, { fields: { practiceMode: 'fading_cues', chunkText: '谢谢' } });
-    const [a] = ev(r, 'assessment'); assert.equal(a.transcript, '谢'); assert.equal(a.transcriptDerived, true); assert.equal(a.basis, 'script');
-    assert.equal(a.referenceText, '谢谢');
-    assert.ok(ev(r, 'done')[0].corrections.some((c) => c.kind === 'omission' && c.source === 'llm'));
-    const sttCalls = () => svc.state.requests.filter((x) => x.url === '/v1/audio/transcriptions').length;
-    assert.equal(sttCalls(), 1);
-    r = await postAttempt(t, { fields: { practiceMode: 'listen_repeat' } });
-    assert.equal(sttCalls(), 1); assert.equal(ev(r, 'assessment')[0].transcript, undefined);
-    assert.ok(!ev(r, 'done')[0].corrections.some((c) => c.kind === 'omission')); // no transcript => omission dropped
+    let r = await postAttempt(t, { fields: { practiceMode: 'listen_repeat', chunkText: '谢谢' } });
+    let [a] = ev(r, 'assessment'); assert.equal(a.transcript, '谢谢'); assert.equal(a.transcriptDerived, true); assert.equal(a.basis, 'script');
+    assert.equal(a.referenceText, '谢谢'); assert.equal(sttCalls(), 1);
+    assert.deepEqual([a.facts.stt.status, a.facts.stt.reliable, a.facts.completeness], ['ok', true, 'verified']);
+    r = await postAttempt(t, { fields: { practiceMode: 'fading_cues' } }); assert.equal(sttCalls(), 2);
+    // STT HTTP error: assessment still returned, facts.stt says so, a status event explains, the coach says it could not check for omissions
     svc.state.sttStatus = 500;
-    r = await postAttempt(t, { fields: { practiceMode: 'fading_cues' } });
+    r = await postAttempt(t, { fields: { practiceMode: 'listen_repeat' } });
     assert.equal(ev(r, 'status').find((s) => s.stage === 'transcribing' && s.skipped).code, 'openai_500');
-    assert.equal(ev(r, 'assessment').length, 1);
+    [a] = ev(r, 'assessment'); assert.equal(a.facts.stt.status, 'failed'); assert.equal(a.facts.completeness, 'unverified'); assert.equal(a.transcript, undefined);
+    assert.ok(ev(r, 'coach_text').some((x) => x.role === 'caveat' && x.delta === '这次没能检查有没有漏词。'));
   } finally { await t.close(); }
 });
 
@@ -312,7 +311,7 @@ test('mock engine path is labelled in the SSE payload; nothing is written to dis
     assert.ok(ev(r, 'status').every((s) => s.engine === undefined || s.mock === true));
     assert.equal(ev(r, 'done')[0].summary.mock, true);
     assert.equal(fs.readdirSync(os.tmpdir()).length, before); // multer memoryStorage: no temp files
-    assert.deepEqual(t.db.raw.prepare("select name from sqlite_master where type='table' and name not like 'sqlite_%'").all().map((x) => x.name).sort(), ['prefs', 'saved_words', 'word_history']);
+    assert.deepEqual(t.db.raw.prepare("select name from sqlite_master where type='table' and name not like 'sqlite_%'").all().map((x) => x.name).sort(), ['missed_words', 'prefs', 'saved_words', 'word_history']);
   } finally { await t.close(); }
 });
 
@@ -326,7 +325,7 @@ test('GATE (real clip 08 wrong sentence, real noise clip 07): assessment event +
       const [a] = ev(r, 'assessment');
       assert.equal(a.status, 'ok'); assert.equal(a.matchesText, false); assert.equal(a.gate, 'low_match');
       assert.match(a.gateMessage, /doesn't seem to match/);
-      assert.deepEqual(a.facts, { confirmedToneErrors: [], uncertain: [] });
+      assert.deepEqual([a.facts.confirmedToneErrors, a.facts.uncertain, a.facts.missingWords, a.facts.substitutedWords, a.wordStatus, a.facts.canPraise], [[], [], [], [], [], false]);
       assert.ok(a.syllables.every((x) => x.tone.decision === 'no_decision' && x.tone.heard === null));
       const texts = ev(r, 'coach_text'); const audios = ev(r, 'coach_audio');
       assert.deepEqual(texts.map((x) => [x.delta, x.role]), [['请再说一遍这句话。', 'gate']]);
@@ -357,6 +356,7 @@ test('POLICY e2e (real clip 05): demoted 我/喜/欢 can NOT be claimed by the L
     { kind: 'model', targetText: '欢', explanationZh: '你把“欢”读成了第二声，要读第一声。', modelText: '欢', factRef: 'tone:2' },     // claim inside a "model" correction
     { kind: 'tone', targetText: '学', explanationZh: '“学”应该读第二声，你读成了第四声。', modelText: '学', factRef: 'tone:3' },        // confirmed => kept
   ], nextPromptZh: '再试试，注意升调。' });
+  svc.state.sttText = '我喜欢学中文。'; // STT autocorrects the wrong tones to fluent text (real finding): tone claims must NOT depend on it
   const t = await server(envOai(), { engine: await fixtureEngine('05-xihuan-zhongwen-wrong-tone') });
   try {
     const r = await postAttempt(t, { fields: { chunkText: '我喜欢学中文' } });
@@ -372,26 +372,28 @@ test('POLICY e2e (real clip 05): demoted 我/喜/欢 can NOT be claimed by the L
     assert.ok(sent.facts.uncertain.every((u) => !('heardTone' in u) && !('heard' in u)));
     const [done] = ev(r, 'done');
     assert.equal(done.corrections.length, 2);
-    // demoted item: rewritten to the not-sure line, no tone claim, no factRef
-    const c0 = done.corrections.find((c) => c.targetText === '我');
-    assert.ok(c0 && c0.source === 'server_rewrite' && c0.factRef === null && c0.explanationZh.includes('不太确定'));
+    // demoted item: the LLM's claim about 我 is NOT spoken (the two slots go to the confirmed errors; the rewrite would be 'not sure' anyway)
+    assert.ok(!done.corrections.some((c) => c.targetText === '我' || c.targetText === '欢'));
+    assert.ok(done.corrections.every((c) => c.kind === 'tone' && c.factRef));
     assert.ok(done.corrections.some((c) => c.kind === 'tone' && c.factRef === 'tone:3' && c.source === 'llm'));
     const spoken = ev(r, 'coach_text').map((x) => x.delta).join('|');
-    assert.ok(!spoken.includes('第一声') && !spoken.includes('第三声') && !spoken.includes('升调'), spoken);
-    assert.ok(spoken.includes('第二声') && spoken.includes('第四声')); // only the confirmed item's tones
-    assert.equal(ev(r, 'coach_text')[0].delta, '不错，我们继续。');
+    assert.ok(!spoken.includes('“我”') && !spoken.includes('“欢”') && !spoken.includes('升调'), spoken); // nothing about the demoted syllables
+    assert.ok(spoken.includes('第二声') && spoken.includes('第四声') && spoken.includes('“中”应该读第一声，我听到的是第三声')); // only the confirmed items, with their facts
+    assert.equal(ev(r, 'coach_text')[0].delta, '有几个地方要再练一练。'); // 中 (word score 62.9) is an acoustic-only low-score candidate => no plain praise
     assert.equal(done.summary.confirmedToneErrors, 2);
   } finally { await t.close(); }
 });
 
-test('POLICY e2e (real clip 04, correct speech): demoted 欢 flag => LLM tone claim rewritten; no tone claim spoken at all', async () => {
+test('POLICY e2e (real clip 04, correct speech): demoted 欢 flag => LLM is not even called (nothing to explain); fixed praise; no tone claim spoken', async () => {
   svc.state.chatScript = llm({ praiseZh: '很好！', corrections: [{ kind: 'tone', targetText: '欢', explanationZh: '“欢”读成了第二声。', modelText: '欢', factRef: 'tone:2' }], nextPromptZh: '继续。' });
+  svc.state.sttText = '我喜欢学中文。';
   const t = await server(envOai(), { engine: await fixtureEngine('04-xihuan-zhongwen-correct') });
   try {
     const r = await postAttempt(t, { fields: { chunkText: '我喜欢学中文' } });
     assert.deepEqual(ev(r, 'assessment')[0].facts.confirmedToneErrors, []);
     const [done] = ev(r, 'done');
-    assert.ok(done.corrections.every((c) => c.kind !== 'tone')); assert.equal(done.corrections[0].source, 'server_rewrite');
+    assert.equal(chatCalls(), 0); assert.deepEqual(done.corrections, []); assert.equal(done.summary.llmCalled, false);
+    assert.equal(ev(r, 'coach_text')[0].role, 'praise'); assert.equal(ev(r, 'assessment')[0].facts.completeness, 'verified');
     assert.ok(!ev(r, 'coach_text').map((x) => x.delta).join('').match(/第.声/));
   } finally { await t.close(); }
 });

@@ -10,7 +10,7 @@ curl -N -b jar.txt http://localhost:8080/api/attempt \
   -F chunkText='谢谢' -F assessMode=close -F practiceMode=listen_repeat \
   -F attemptId=att-$(date +%s)-1 -F voice=zh-CN-XiaoxiaoNeural -F speed=1
 ```
-Fields: `audio` (file, <=10 MB, audio/mp4|wav|webm|mpeg|ogg), `chunkText` (<=100 chars, no `[ ]【 】`), `assessMode` close|retell, `practiceMode` listen_repeat|fading_cues, `attemptId` (8-100 chars `[A-Za-z0-9._:-]`, unique per recording; re-send the SAME id when retrying the same take), optional `voice`, `speed` (0.5-1.5).
+Fields: `audio` (file, <=10 MB, audio/mp4|wav|webm|mpeg|ogg), `chunkText` (<=100 chars, no `[ ]【 】`), `assessMode` close|retell, `practiceMode` listen_repeat|fading_cues (`trouble_word` exists only in the prefs enum — drills use `/api/drill/attempt`), `attemptId` (8-100 chars `[A-Za-z0-9._:-]`, unique per recording; re-send the SAME id when retrying the same take), optional `voice`, `speed` (0.5-1.5).
 Validation failures are plain JSON `400 {error:{code,message}}` BEFORE the stream starts (`missing_audio`, `invalid_chunk`, `stage_directions_in_chunk`, `invalid_assess_mode`, `invalid_practice_mode`, `invalid_attempt_id`, `tts_audio_rejected`), `413 upload_too_large`, `409 attempt_in_progress`, `429` rate limit.
 
 ## Events (`event: <name>\ndata: <json>\n\n`)
@@ -35,7 +35,7 @@ event: assessment  data: {"engine":"toneperfect","mock":false,"modelVersion":"�
                     items never carry `heard`. ONLY facts.confirmedToneErrors may be shown as "you said tone X" (<= 2, lowest tone score first).
                     (+ "transcript","transcriptDerived":true when STT ran; retell => "basis":"transcript","lowConfidence":true)
 event: status      data: {"stage":"coaching"}
-event: coach_text  data: {"delta":"很好，发音很清楚。","index":0,"role":"praise"}      roles: praise|correction|correction_model|next
+event: coach_text  data: {"delta":"很好，发音很清楚。","index":0,"role":"praise"}      roles: opener|praise|correction|correction_model|caveat|next|gate (see "Word-level feedback" below)
 event: coach_text  data: {"delta":"第二个“谢”应该读第四声，你读成了第二声。","index":1,"role":"correction"}
 event: coach_audio data: {"url":"/api/audio/9a93ae52934b74bcd1e1db9a.mp3","index":1,"text":"第二个“谢”应该读第四声，你读成了第二声。"}
 event: done        data: {"corrections":[{"kind":"tone","targetText":"谢","explanationZh":"…","modelText":"谢谢","factRef":"tone:1","source":"llm"}],
@@ -45,7 +45,7 @@ event: done        data: {"corrections":[{"kind":"tone","targetText":"谢","expl
 ```
 `coach_audio` arrive in order, one per `coach_text` index (the `next` prompt is last); each url is a short-lived (5 min) mp3 behind the cookie; play them with the single `<audio>` element, in order. `source` is `llm` | `server_fact` (server rewrote it from facts) | `server_rewrite` ("not sure" template).
 
-Skips (stream continues, assessment still delivered): `{"stage":"coaching","skipped":true,"code":"llm_not_configured"|"openai_500"|…,"message":…}`, `{"stage":"speaking","skipped":true,"code":"tts_not_configured"|…}`, `{"stage":"transcribing","skipped":true,…}` (close mode only).
+Skips (stream continues, assessment still delivered): `{"stage":"coaching","skipped":true,"code":"llm_not_configured"|"openai_500"|…,"message":…}`, `{"stage":"speaking","skipped":true,"code":"tts_not_configured"|…}`, `{"stage":"transcribing","skipped":true,"code":"stt_timeout"|"stt_not_configured"|"openai_500"|…,"message":…}` (STT now runs for EVERY close-mode attempt, in parallel with TonePerfect, capped at `STT_WAIT_MS`=3000 ms; when it did not run the assessment still arrives, `facts.stt.status` says why and the coach adds the spoken caveat `这次没能检查有没有漏词。`).
 
 **Terminal error (no assessment, NO coaching text, stream then ends):**
 ```
@@ -70,3 +70,95 @@ event: coach_audio data: {"url":"/api/audio/….mp3","index":0,"text":"请再说
 event: done        data: {"corrections":[],"summary":{…,"matchesText":false,"coached":false,"gate":"low_match","gatePhraseZh":"请再说一遍这句话。",…}}
 ```
 No LLM call is made. UI: show `gateMessage` (English) and treat it as "try again", not as a score; do not colour syllables. Thresholds are constants in `config.js` (`ASSESSMENT_POLICY`); evidence and caveats in `test-results/VALIDATION.md` (n = 8 clips, one speaker).
+
+# Word-level feedback: missed / skipped / wrong words  (added 2026-10-28)
+
+**Rule:** missing and wrong *words* matter more than tones. TonePerfect per-word/initial scores are the *acoustic* evidence; an STT transcript (gpt-4o-transcribe, `language:"zh"`, prompt does NOT contain the reference) aligned to the reference text at character/pinyin level is the *second* source. The transcript is used ONLY for missing/wrong words — never for a tone claim (it autocorrects wrong tones). All word claims are computed by code (`engines/assessment/words.js`); the LLM never creates, drops or rephrases one. Constants: `ASSESSMENT_POLICY` in `config.js`; evidence: `test-results/VALIDATION.md`.
+
+| evidence | `status` | `confidence` | `source` |
+|---|---|---|---|
+| word absent/different in the transcript **and** acoustic candidate (word score < 65 or initial score < 30) | `missed` / `substituted` | `high` | `both` |
+| absent/different in the transcript only | `missed` / `substituted` | `medium` | `stt` |
+| acoustic candidate only (STT timeout/failure/not configured/unreliable, or the transcript has the word) | `uncertain` (`reason:"low_score"`) | `low` | `acoustic` |
+| confirmed tone error (policy-surviving `review`) | `wrong` (`reason:"tone"`) | `medium` | `acoustic` |
+| weak tone/initial/final evidence | `uncertain` (`reason:"tone"|"initial"|"final"`) | `low` | `acoustic` |
+
+A single source never produces "good": any `missed`/`substituted`/`uncertain(low_score)` word or a pause > 500 ms between words makes `facts.canPraise:false` and the coach says the fixed opener `有几个地方要再练一练。` instead of praise (even if the LLM wrote praise — it is dropped).
+
+## `assessment` event additions (every field below is new; existing fields unchanged)
+`wordStatus` — one entry per Chinese character of the chunk you sent, **code-point offsets into the exact `chunkText` received** (`end` exclusive, punctuation/latin/spaces skipped, so `Array.from(chunkText).slice(start,end).join("")===text`). `[]` when the result is gated (`gate:"low_match"`).
+```
+"wordStatus":[
+  {"start":0,"end":1,"text":"我","pinyin":"wǒ","status":"ok"},
+  {"start":2,"end":3,"text":"欢","pinyin":"huan","status":"ok"},
+  {"start":3,"end":4,"text":"学","pinyin":"xué","status":"missed","reason":"omitted","source":"both","confidence":"high",
+   "detail":"not found in the transcript; word score 60.9 < 65; initial score 3.3 < 30"},
+  {"start":4,"end":5,"text":"中","pinyin":"zhōng","status":"wrong","reason":"tone","source":"acoustic","confidence":"medium","detail":"expected tone 1, heard tone 3"},
+  {"start":1,"end":2,"text":"喜","pinyin":"xǐ","status":"substituted","heard":"爱","source":"stt","confidence":"medium","detail":"transcript has a different word here"}
+]
+```
+`status` ok|missed|substituted|wrong|uncertain · `reason` omitted|low_score|tone|initial|final (|added: never emitted, insertions go to `facts.insertedText`) · `heard` only for `substituted` · `source` acoustic|stt|both · `confidence` high|medium|low · `detail` English, for a debug tooltip only. `ok` entries carry only start/end/text/pinyin. `pinyin` is the contextual reading (neutral tones unmarked: `huan`). Suggested UI: red = missed, orange = substituted/wrong, grey dashed = uncertain; never show `uncertain` as an error.
+
+`facts` gains (real output for a take that skipped 学 in 我喜欢学中文, STT transcript `我喜欢中文。`):
+```
+"facts":{"confirmedToneErrors":[],"uncertain":[],
+  "missingWords":[{"ref":"missing:0","score":60.9,"text":"学","pinyin":"xué","start":3,"end":4,"chars":[{"start":3,"end":4,"text":"学"}],
+                   "source":"both","confidence":"high","missedText":"学"}],
+  "substitutedWords":[],                      // same shape + "heard":"爱"
+  "unclearWords":[],                          // low-confidence acoustic-only words, same shape without heard
+  "insertedText":[],                          // [{"text":"很","afterOffset":1}] = extra word(s) heard after reference offset 1; informational, does not block praise
+  "notableGaps":[],                           // [{"afterStart":1,"ms":640}] pause > 500 ms after the char at offset 1
+  "stt":{"status":"ok","ms":773,"coverage":0.83,"reliable":true},   // status ok|timeout|failed|unavailable (+ "reason"); reliable=false when coverage < 0.3 (transcript ignored)
+  "completeness":"incomplete",                // verified | unverified (STT did not/could not confirm) | incomplete | unknown (gated)
+  "canPraise":false}
+```
+`missingWords[].text` is the script *word* (Intl.Segmenter), `missedText` the skipped characters inside it (differs for a partly-skipped word such as 很好 where only 好 was lost); `start/end` span the script word. Existing `confirmedToneErrors[]` items also gain `start`,`end`.
+Also on the event: `"savedMissed":[{"id":1,"text":"学","pinyin":"xué","meaning":null,"reason":"omitted","start":3,"end":4,"missCount":1,"isNew":true}]` (words just auto-saved to the "words I don't know" list; `reason` omitted|substituted|low_score; `meaning` fills in later via the LLM — fetch `GET /api/words/missed` to see it) and `"transcript":"我喜欢中文。","transcriptDerived":true` (display only, as a hint "I heard …"; never persisted).
+
+## `coach_text` / `done` for word feedback (real output)
+```
+event: coach_text  data: {"delta":"有几个地方要再练一练。","index":0,"role":"opener"}
+event: coach_text  data: {"delta":"漏掉了“学”这个词。","index":1,"role":"correction","caption":"学 xué","start":3,"end":4}
+event: coach_text  data: {"delta":"应该这样说：喜欢学","index":2,"role":"correction_model","start":3,"end":4}
+event: coach_text  data: {"delta":"再说一遍这句话吧。","index":3,"role":"next"}
+event: coach_audio data: {"url":"/api/audio/….mp3","index":1,"text":"漏掉了“学”这个词。"}        // the missed word is modelled via TTS
+event: done        data: {"corrections":[{"kind":"missing","targetText":"学","explanationZh":"漏掉了“学”这个词。","modelText":"喜欢学","factRef":"missing:0",
+                     "source":"server_fact","start":3,"end":4,"pinyin":"xué","meaning":null,"evidence":{"source":"both","confidence":"high"}}],
+                   "summary":{…,"missingWords":1,"substitutedWords":0,"completeness":"incomplete","stt":"ok","llmCalled":false,"timings":{…}},
+                   "timings":{"receiveMs":7,"transcodeMs":0,"assessMs":2001,"sttMs":560,"sttWaitMs":0,"analysisMs":1,"firstCoachTextMs":2003,"firstAudioMs":2004,"ttsFirstAudioMs":0,"ttsFirstCached":true,"totalMs":3100}}
+```
+- New `role`s: `opener` (replaces praise whenever anything is missing/uncertain/toned), `caveat` (`这次没能检查有没有漏词。` when STT did not run), plus `praise` only when `facts.canPraise`. `caption` = `"<word> <pinyin>[ — <English gloss>]"` for a on-screen card while the line is spoken; `start/end` let you highlight the word in the chunk. Hedged wording for `medium` evidence: `好像漏掉了“X”这个词。`; substitution: `这里应该是“X”，我听到的是“Y”。`; partly skipped word: `“很好”这个词里漏掉了“好”。`.
+- Correction `kind`s now: `tone` (as before), `missing`, `substituted`, `unclear` (hedged `“X”这个词我听得不太清楚。`), `model`; all word kinds are `source:"server_fact"`; each carries `start`,`end`,`pinyin`,`meaning` (nullable) and `evidence{source,confidence}`. **Max 2 corrections in total; missing/substituted rank above tone errors above unclear.**
+- `done.timings` (ms, content-free; also logged): `receiveMs` (upload parse), `transcodeMs` (always 0: no transcode), `assessMs` (TonePerfect), `sttMs` (transcription call), `sttWaitMs` (time the pipeline waited on STT after TonePerfect returned; 0 when STT finished first; capped at 3000 → `facts.stt.status:"timeout"`), `analysisMs`, `llmFirstTokenMs`/`llmTotalMs` (only when the LLM ran), `firstCoachTextMs`, `firstAudioMs` (first `coach_audio` sent, from request start), `ttsFirstAudioMs`, `ttsFirstCached`, `totalMs`. All are from the server's request start (after the upload completed). Also in `summary.timings`.
+- Tone corrections are code-built from the confirmed fact by default (instant). `COACH_LLM_TONE=1` makes the LLM phrase them (costs ≈ 1.5–3 s).
+
+## Words I don't know (auto-saved) — `GET/POST/DELETE /api/words/missed`
+Every `missed`/`substituted` word with `confidence` ≠ low (and an acoustic-only word with word score < `SAVE_LOW_SCORE_WORD_MAX`=55) is saved/updated automatically (dedupe by `text`; `missCount`+1, `correctStreak` reset to 0, status back to `learning`). Stored: word text, pinyin, short English gloss, counters, your own script chunk — **never audio, never transcripts**. Gloss: cheap LLM call, only if OpenAI is configured, cached, tried once; otherwise `meaning:null`.
+```
+GET /api/words/missed            (learning only; add ?all=1 to include known)
+200 [{"id":1,"text":"学","pinyin":"xué","meaning":"to study","missCount":1,"correctStreak":0,"needed":3,
+      "lastMissedAt":"2026-10-28T02:24:25.365Z","sourceChunk":"我喜欢学中文","status":"learning"}]      sorted missCount desc, then lastMissedAt desc
+POST   /api/words/missed/:id/known      -> 204   (graduated manually; streak reset)       404 {"ok":false,"error":{"code":"not_found",…}}
+POST   /api/words/missed/:id/learning   -> 204   (back to the list)
+DELETE /api/words/missed/:id            -> 204
+```
+`needed` = `DRILL_GRADUATE_STREAK` (3, constant in `config.js`). `/api/words` (saved vocabulary) is unchanged.
+
+## Trouble-word drills
+```
+GET /api/drill/next?n=5      (1-20; learning words, lowest streak first, then most missed, then newest)
+200 [{"wordId":1,"text":"学","pinyin":"xué","meaning":"to study","exampleSentence":"我喜欢学中文","promptText":"我喜欢学中文","correctStreak":0,"needed":3}]
+```
+`promptText` is what the learner must say. For a word of 2+ characters it is the word itself. For a **single character** (a poor isolated test: TonePerfect scores single syllables badly and coarticulation is missing) it is the user's own `sourceChunk`, and only the target span is judged. Show `text/pinyin/meaning`; play the model via `POST /api/tts {text: promptText}`.
+
+`POST /api/drill/attempt` — multipart `audio`, `wordId`, `attemptId` (same rules as `/api/attempt`; optional `voice`,`speed`). 404 `not_found` for an unknown `wordId`. SSE with the same event names. `correct` is decided **server-side** (every character of the target is `ok`, or only tone/initial/final-`uncertain`; a `missed`/`substituted`/`wrong`/low-score character or a gated take is not correct) and any client-sent `correct` field is ignored.
+```
+event: status      data: {"stage":"uploading",…}  {"stage":"assessing"}  {"stage":"transcribing"}  {"stage":"coaching"}  {"stage":"speaking",…}
+event: assessment  data: {…same as /api/attempt…, "referenceText":"我喜欢学中文","wordStatus":[…],"facts":{…},"savedMissed":[],
+                          "target":{"wordId":1,"text":"学","start":3,"end":4}}      // judge wordStatus within [start,end)
+event: coach_text  data: {"delta":"对了！","index":0,"role":"praise"}                // wrong: role correction (+caption,start,end) + correction_model + next("再试一次。")
+event: coach_audio data: {"url":"/api/audio/….mp3","index":0,"text":"对了！"}
+event: done        data: {"correct":true,"counted":true,"correctStreak":1,"needed":3,"graduated":false,"wordId":1,"corrections":[],
+                          "timings":{"receiveMs":1,"transcodeMs":0,"assessMs":1,"sttMs":2,"sttWaitMs":1,"analysisMs":1,"firstCoachTextMs":4,"firstAudioMs":4,"ttsFirstAudioMs":0,"ttsFirstCached":true,"totalMs":4}}
+```
+`counted:false` (+ `"reason":"low_match"`) when the take did not match the text (nothing changes). A miss resets `correctStreak` to 0 (and counts as a miss in `missCount`); the 3rd consecutive correct take sets `graduated:true`, `correctStreak:3`, status → `known` (spoken line `这个词你学会了！`), and the word leaves `/api/drill/next`. Drill attempts never auto-save new words (`savedMissed:[]`).

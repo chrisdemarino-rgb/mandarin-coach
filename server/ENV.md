@@ -20,16 +20,19 @@ Never commit secrets, never put them in the frontend, never log them (logs are r
 | `TONEPERFECT_BASE_URL` | Point at a fake server in tests | `https://api.toneperfect.app` |
 | `AZURE_SPEECH_BASE_URL` | Test override for the Azure endpoint | `https://<region>.tts.speech.microsoft.com` |
 | `LLM_PROVIDER` | Coaching LLM provider | only `openai` is implemented; anything else logs a warning and falls back |
-| `OPENAI_BASE_URL`, `COACH_MODEL`, `STT_MODEL`, `OPENAI_TTS_MODEL` | Overrides | `gpt-4o-mini`, `gpt-4o-transcribe`, `gpt-4o-mini-tts` |
+| `OPENAI_BASE_URL`, `COACH_MODEL`, `STT_MODEL`, `OPENAI_TTS_MODEL` | Overrides | `gpt-4.1-mini`, `gpt-4o-transcribe`, `gpt-4o-mini-tts` |
+| `STT_WAIT_MS` | How long to wait for the STT transcript after TonePerfect returned, before going acoustic-only | `3000` |
+| `COACH_LLM_TONE` | `1`/`true`: let the LLM phrase tone explanations (≈ +1.5–3 s; default: code-built lines) | off |
 | `MOCK_FORCE=unavailable` | Dev: make the mock engine always fail | Exercises the "no assessment obtained" Retry/Skip UI |
 
 ## Behaviour notes
 - **Login lockout**: per IP, 5 wrong passcodes => locked 30 s, then 1 m, 5 m, 15 m, 1 h, 6 h on each further round; globally 20 failures in 10 min (any IPs) => 1 m, 5 m, 15 m, 1 h, 6 h. Locked => `429 {error:{code:"login_locked"}}` + `Retry-After`, even for the right passcode. Success resets that IP's ladder. Passcode compare is constant-time. State is in memory (resets on restart). Behind a proxy set `TRUST_PROXY` so IPs are real.
-- **practiceMode** is validated against `listen_repeat|fading_cues` (prefs and attempt). Future values are rejected until implemented.
-- **Keys unlock**: `TONEPERFECT_API_KEY` real assessment · `OPENAI_API_KEY` coaching text, STT (retell, close-mode omission detection when practiceMode=fading_cues), OpenAI TTS fallback, level-3 cues · `AZURE_SPEECH_KEY`+`REGION` preferred TTS · `APP_PASSCODE` login.
+- **practiceMode** is validated against `listen_repeat|fading_cues` for `/api/attempt`; the prefs enum also accepts `trouble_word` (drills use `/api/drill/attempt`).
+- **Keys unlock**: `TONEPERFECT_API_KEY` real assessment · `OPENAI_API_KEY` coaching text, STT (retell, and **every close-mode attempt** for missing/wrong-word detection, in parallel with TonePerfect; without it the assessment is acoustic-only and says so), OpenAI TTS fallback, level-3 cues · `AZURE_SPEECH_KEY`+`REGION` preferred TTS · `APP_PASSCODE` login.
 - Audio uploads are held in memory only and never written to disk or logged; TTS audio is cached in memory (5 min for /api/audio, LRU for /api/tts).
 - Offline harness (not the app path): `node server/scripts/validate-synthetic.js` (OpenAI TTS -> TonePerfect, <= 8 credits, cached in `test-results/synthetic/`), `node server/scripts/validate-tones.js` (real recordings).
 
 - **Assessment policy** (not env-configurable; named constants in `config.js` `ASSESSMENT_POLICY`): gate `LOW_MATCH_OVERALL_MAX=40`, `LOW_MATCH_PRONUNCIATION_MAX=60`; tone claims `TONE_REVIEW_MAX_SCORE=70`, `TONE_MAX_CLAIMS=2`, `TONE_DENSITY_MAX_RATIO=0.4` (chunks >= `TONE_DENSITY_MIN_SYLLABLES=4`). Derivation and caveats: `test-results/VALIDATION.md`.
 
 Chris only ever has to supply: `APP_PASSCODE`, `TONEPERFECT_API_KEY`, `OPENAI_API_KEY`, and optionally `AZURE_SPEECH_KEY` + `AZURE_SPEECH_REGION`.
+- **Word detection / latency constants** (`ASSESSMENT_POLICY`, not env-configurable except `STT_WAIT_MS`): `ACOUSTIC_MISSING_WORD_MAX=65`, `ACOUSTIC_INITIAL_ABSENT_MAX=30`, `STT_MIN_COVERAGE=0.3`, `SAVE_LOW_SCORE_WORD_MAX=55`, `LONG_PAUSE_MS=500`; `DRILL_GRADUATE_STREAK=3`. Outbound HTTP uses undici keep-alive; fixed coach phrases are pre-synthesised at startup (TTS cache). `node server/scripts/measure-latency.js [--runs N --tp-delay ms --llm-tone]` measures stage timings against fakes + real OpenAI.

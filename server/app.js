@@ -10,6 +10,7 @@ import { prefsRouter } from './routes/prefs.js';
 import { wordsRouter } from './routes/words.js';
 import { mediaRouter } from './routes/media.js';
 import { attemptRouter } from './routes/attempt.js';
+import { missedRouter } from './routes/missed.js';
 import { createServices } from './services/index.js';
 
 /** Build the Express app. Dependencies are injected so tests can use fakes. */
@@ -51,9 +52,10 @@ export function createApp({ cfg, db, engine, services = createServices(cfg), log
   // Everything else under /api requires the session cookie.
   app.use('/api', requireAuth(cfg), rateLimit({ windowMs: 60_000, max: 300 }));
   app.use('/api', prefsRouter(db));
+  app.use('/api', missedRouter({ db, cfg })); // before wordsRouter: /words/missed must not be read as /words/:id
   app.use('/api', wordsRouter(db));
   app.use('/api', mediaRouter({ services, cfg }));
-  app.use('/api', attemptRouter({ cfg, engine, services }));
+  app.use('/api', attemptRouter({ cfg, engine, services, db }));
 
   app.use('/api', (req, res) => res.status(404).json({ ok: false, error: { code: 'not_found', message: `No such endpoint: ${req.method} ${req.path}` } }));
 

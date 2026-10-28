@@ -1,0 +1,8 @@
+{
+ "sample": "07-silence",
+ "model": "gpt-4o-transcribe",
+ "language": "zh",
+ "prompt": null,
+ "transcript": "初来乍到。",
+ "sttMs": 607
+}

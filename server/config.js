@@ -26,7 +26,32 @@ export const ASSESSMENT_POLICY = Object.freeze({
   TONE_MAX_CLAIMS: 2,
   TONE_DENSITY_MAX_RATIO: 0.4,
   TONE_DENSITY_MIN_SYLLABLES: 4,
+
+  // ---- missed / skipped / substituted words (engines/assessment/words.js). Derived from the cached real-clip results
+  //      (08 real clips + 2 ffmpeg-trimmed clips; n is tiny, see test-results/VALIDATION.md "Omission thresholds").
+  // A reference word is an ACOUSTIC missing-word candidate when its word score is below this. Data: genuine words min 62.9;
+  // omitted/truncated words 51.1-60.9 (3 samples); wrong-sentence/noise words <= 58.3. The margin is only ~2 points, so this
+  // alone is NEVER enough to claim "missed" (acoustic-only => status 'uncertain', confidence 'low').
+  ACOUSTIC_MISSING_WORD_MAX: 65,
+  // ... or when the INITIAL consonant score is below this (only for syllables that have an initial). Data: skipped/truncated
+  // syllables 1.1-5.4 (initial not heard at all); every genuine initial >= 57.3. Wide margin, but only 3 samples.
+  ACOUSTIC_INITIAL_ABSENT_MAX: 30,
+  // If the STT transcript explains less than this share of the reference characters while the acoustic result says the audio
+  // matches, the transcript is considered unreliable (hallucination / accent / noise): STT-only evidence is downgraded to low.
+  STT_MIN_COVERAGE: 0.3,
+  // Auto-save to the 'words I don't know' list: omitted/substituted words (confidence high|medium) always; an acoustic-only low-score
+  // word only when its word score is below this (stricter than the candidate threshold, to keep the list clean).
+  SAVE_LOW_SCORE_WORD_MAX: 55,
+  // /api/attempt starts STT in parallel with the assessment engine and waits for it at most this long (ms) after the
+  // assessment is ready; on timeout the take is assessed acoustically only and facts.stt says so.
+  STT_WAIT_MS: 3000,
+  // A silent gap between consecutive syllables longer than this (ms) does not claim an error but blocks plain praise.
+  // Data: genuine takes had gaps up to 625 ms (clip 05) so this only withholds praise, it never flags a word.
+  LONG_PAUSE_MS: 500,
 });
+
+/** A word graduates from the "words I don't know" list after this many CONSECUTIVE correct drill attempts; any miss resets it to 0. */
+export const DRILL_GRADUATE_STREAK = 3;
 
 export function loadDotEnv() {
   for (const p of [path.join(APP_ROOT, '.env'), path.join(APP_ROOT, 'server', '.env')]) {
@@ -81,7 +106,9 @@ export function loadConfig(env = process.env) {
     sessionSecret: has(env.SESSION_SECRET) ? env.SESSION_SECRET : null, // else derived from passcode
     sessionDays: Number.parseInt(env.SESSION_DAYS, 10) || 30,
     assessmentEngine: engine,
-    policy: ASSESSMENT_POLICY,
+    policy: Object.freeze({ ...ASSESSMENT_POLICY, ...(has(env.STT_WAIT_MS) && Number(env.STT_WAIT_MS) > 0 ? { STT_WAIT_MS: Number(env.STT_WAIT_MS) } : {}) }),
+    coachLlmTone: env.COACH_LLM_TONE === '1' || env.COACH_LLM_TONE === 'true',
+    drillGraduateStreak: DRILL_GRADUATE_STREAK,
     toneperfect: {
       apiKey: tpKey,
       baseUrl: (env.TONEPERFECT_BASE_URL || 'https://api.toneperfect.app').replace(/\/+$/, ''),
@@ -89,7 +116,7 @@ export function loadConfig(env = process.env) {
     openai: {
       apiKey: has(env.OPENAI_API_KEY) ? env.OPENAI_API_KEY.trim() : null,
       baseUrl: (env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, ''),
-      coachModel: env.COACH_MODEL || 'gpt-4o-mini',
+      coachModel: env.COACH_MODEL || 'gpt-4.1-mini',
       sttModel: env.STT_MODEL || 'gpt-4o-transcribe',
       ttsModel: env.OPENAI_TTS_MODEL || 'gpt-4o-mini-tts',
     },

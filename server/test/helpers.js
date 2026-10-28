@@ -60,3 +60,30 @@ export async function fixtureEngine(name) {
   const fx = JSON.parse(fs.readFileSync(path.join(dir, `${name}.json`), 'utf8'));
   return withPolicy({ name: 'toneperfect', mock: false, available: () => true, async assess() { return structuredClone(fx.result); } });
 }
+
+/** Multipart POST to /api/drill/attempt. */
+export async function postDrill(t, { wordId, audio = Buffer.alloc(2000, 7), mime = 'audio/mp4', fields = {} } = {}) {
+  const form = new FormData();
+  form.append('audio', new Blob([audio], { type: mime }), 'rec.m4a');
+  const f = { wordId: String(wordId), attemptId: 'drill-' + Math.random().toString(36).slice(2, 12), ...fields };
+  for (const [k, v] of Object.entries(f)) if (v !== undefined) form.append(k, v);
+  const res = await fetch(t.base + '/api/drill/attempt', { method: 'POST', body: form, headers: { Cookie: t.cookie() } });
+  const text = await res.text();
+  const events = [];
+  for (const block of text.split('\n\n')) { const m = /^event: (\w+)\ndata: (.*)$/ms.exec(block.trim()); if (m) events.push({ event: m[1], data: JSON.parse(m[2]) }); }
+  let json = null; try { json = JSON.parse(text); } catch { /* sse */ }
+  return { status: res.status, events, text, json };
+}
+
+/** An engine whose result can be swapped between cached real-clip fixtures during a test. */
+export async function switchableEngine(first) {
+  let cur = await fixtureEngine(first);
+  const eng = { name: 'toneperfect', mock: false, available: () => true, assess: (a) => cur.assess(a) };
+  eng.use = async (name) => { cur = await fixtureEngine(name); };
+  return eng;
+}
+export async function sttFixture(name) {
+  const fs = await import('node:fs'); const url = await import('node:url'); const path = await import('node:path');
+  const dir = path.join(path.dirname(url.fileURLToPath(import.meta.url)), 'fixtures', 'stt');
+  return JSON.parse(fs.readFileSync(path.join(dir, `${name}.json`), 'utf8')).transcript;
+}

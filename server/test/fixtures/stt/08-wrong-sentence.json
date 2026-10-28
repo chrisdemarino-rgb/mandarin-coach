@@ -1,0 +1,8 @@
+{
+ "sample": "08-wrong-sentence",
+ "model": "gpt-4o-transcribe",
+ "language": "zh",
+ "prompt": null,
+ "transcript": "你好",
+ "sttMs": 482
+}

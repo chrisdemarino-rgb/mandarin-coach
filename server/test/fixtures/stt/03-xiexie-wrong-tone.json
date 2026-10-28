@@ -1,0 +1,8 @@
+{
+ "sample": "03-xiexie-wrong-tone",
+ "model": "gpt-4o-transcribe",
+ "language": "zh",
+ "prompt": null,
+ "transcript": "謝謝。",
+ "sttMs": 518
+}

@@ -1,0 +1,8 @@
+{
+ "sample": "01-nihao-correct",
+ "model": "gpt-4o-transcribe",
+ "language": "zh",
+ "prompt": null,
+ "transcript": "你好",
+ "sttMs": 735
+}

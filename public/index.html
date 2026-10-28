@@ -115,6 +115,8 @@
           <p id="cueText" class="cue-text" lang="zh-CN">Tap Start to begin.</p>
           <p id="cueNote" class="muted" hidden></p>
           <p id="notice" class="notice" role="status" hidden></p>
+          <!-- Audio bot: mic hint, text only. Shown by js/mic-hint.js only when mic permission is not 'granted'. -->
+          <p id="micHint" class="muted" hidden>If Safari keeps asking for the microphone: tap the aA (page menu) button in Safari, then Website Settings &gt; Microphone &gt; Allow. Or open Settings &gt; Apps &gt; Safari &gt; Microphone and choose Allow.</p>
         </div>
 
         <div id="statusPanel" class="card status" data-kind="idle">
@@ -228,5 +230,6 @@
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
   <script type="module" src="js/app.js"></script>
+  <script type="module" src="js/mic-hint.js"></script>
 </body>
 </html>

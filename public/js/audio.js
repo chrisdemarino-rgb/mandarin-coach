@@ -63,6 +63,15 @@ function emit(ev, ...args) { for (const fn of listeners[ev] || []) { try { fn(..
 function log(msg) { emit('log', msg); if (opts.log) try { opts.log(msg); } catch (e) {} }
 function setState(s) { if (s === state) return; const old = state; state = s; log(`state ${old} -> ${s}`); emit('state', s, old); }
 export function getState() { return state; }
+// Mic permission as the Permissions API reports it: 'granted' | 'denied' | 'prompt' | 'unknown'.
+// Safari support varies (older iOS has no 'microphone' query, or rejects), so any failure -> 'unknown'. Read-only; never prompts.
+export async function getMicPermission() {
+  try {
+    if (!navigator.permissions || !navigator.permissions.query) return 'unknown';
+    const s = (await navigator.permissions.query({ name: 'microphone' })).state;
+    return s === 'granted' || s === 'denied' || s === 'prompt' ? s : 'unknown';
+  } catch (e) { return 'unknown'; }
+}
 
 const hasSession = () => typeof navigator !== 'undefined' && 'audioSession' in navigator && navigator.audioSession;
 export function getSessionType() { return hasSession() ? navigator.audioSession.type : null; }

@@ -3,6 +3,8 @@
 import { esc, formatPinyin } from "./dom.js";
 import { verdict, isPass } from "../assess.js";
 import { splitCorrections, normalizeKeyIdeas, placeIdeas, ideaKind, modelLine } from "../retell.js";
+import { wordCheckRows, WORD_LEGEND } from "./wordcheck.js";
+import { wordKinds, wordMark } from "../wordcheck.js";
 import { highlightPieceHtml, flaggedWords, groupFlagged, problemWords, reasonText, STATUS_INFO } from "../highlight.js";
 
 // retell idea markers: glyph + dotted/dashed/wavy underline + screen-reader text (never colour only)
@@ -70,7 +72,7 @@ export function createResultView({ onSave }) {
       if (a.retell) {
         const o = S.outcome();
         const b = q("#verdictIcon");
-        b.className = "score-badge " + (o.state === "checked" ? "s-good" : o.state === "missing" ? "s-review" : "s-none");
+        b.className = "score-badge " + (o.state === "checked" || o.state === "covered" ? "s-good" : ["missing", "partial", "wordcheck"].includes(o.state) ? "s-review" : "s-none");
         b.textContent = o.badge; q("#verdict").textContent = o.label; q("#verdictNote").textContent = o.note;
         return;
       }
@@ -87,11 +89,16 @@ export function createResultView({ onSave }) {
     },
     /** Flagged-word list, "added to Words to practise" and "extra words" notes. */
     flags(S, opts) {
-      const a = S.assessment, list = groupFlagged(flaggedWords(a.wordStatus));
+      const a = S.assessment, list = a.retell ? [] : groupFlagged(flaggedWords(a.wordStatus));
+      // retell: wordStatus holds only the reused-phrase word-check findings -> shown as the "Word check" section (Save word, never auto-saved here)
+      const words = a.retell ? a.wordStatus || [] : [], sugg = (a.retellInfo && a.retellInfo.suggestedWords) || [];
+      const meaningOf = (w) => (sugg.find((x) => x.text === w.text) || {}).meaning || "";
       const saved = [...new Set([...(a.savedMissed || []), ...(S.savedMissedExtra || [])])];
       const wrap = q("#flagWrap");
-      wrap.hidden = !list.length && !saved.length && !a.insertedText;
-      q("#flagList").innerHTML = list.map((w) => {
+      wrap.hidden = !list.length && !words.length && !saved.length && !a.insertedText;
+      q("#flagWrap h3").textContent = a.retell ? "Word check" : "Words to work on";
+      q("#flagList").onclick = words.length ? (e) => { const b = e.target.closest(".js-save-wc"); const w = b && words[+b.dataset.i]; if (w) onSave({ text: w.text, pinyin: w.pinyin, meaning: meaningOf(w) }); } : null;
+      q("#flagList").innerHTML = a.retell ? wordCheckRows(words, { meaningOf }) : list.map((w) => {
         const info = STATUS_INFO[w.status];
         const why = w.status === "substituted" ? "Said something else" : w.status === "missed" ? `Missed \u00b7 ${reasonText(w)}` : w.status === "wrong" ? `Wrong \u00b7 ${reasonText(w)}` : `Not sure${w.reason ? ` \u00b7 ${reasonText(w).replace(/^not sure (about )?/, "")}` : ""}`;
         return `<li class="flag is-${w.status}"><span class="w"><span class="hl hl-${w.status}">${esc(w.text)}</span><sup class="hl-m hl-m-${w.status}" aria-hidden="true">${info.marker}</sup></span>${w.pinyin ? `<span class="py">${esc(formatPinyin(w.pinyin))}</span>` : ""}<span class="why">${esc(why)}</span>${w.heard ? `<span class="heard">heard: <span lang="zh-CN">${esc(w.heard)}</span></span>` : ""}</li>`;
@@ -110,11 +117,13 @@ export function createResultView({ onSave }) {
       const a = S.assessment;
       const R = a.retell ? this.retellData(S) : null;
       grid = R ? R.grid : a.chars;
-      q(".legend").innerHTML = R ? 'Tap characters in the original to save a word. <span class="lg lg-w-missed"><span class="hl hl-missed">word</span><sup class="hl-m">&minus;</sup> missing idea</span>'
+      q(".legend").innerHTML = R ? 'Tap characters in the original to save a word. <span class="lg lg-w-missed"><span class="hl hl-missed">word</span><sup class="hl-m">&minus;</sup> missing idea</span>' + (R.grid.some((c) => c.word) ? " " + WORD_LEGEND : "")
         : 'Tap characters to select, then save as a word. <span class="lg lg-bad">tone to review</span> <span class="lg lg-unsure">not sure</span>';
       q("#resultChars").innerHTML = grid.map((c, i) => {
-        if (c.mark) { const m = MARKS[c.mark]; return `<button type="button" class="rch ${m.cls}" data-i="${i}" data-han="1" aria-pressed="${sel.has(i)}" aria-label="${esc(c.ch)}, ${m.sr}"><span>${esc(c.ch)}</span><small></small><sup class="hl-m ${m.hm}" aria-hidden="true">${m.glyph}</sup></button>`; }
-        if (R && c.han) return `<button type="button" class="rch" data-i="${i}" data-han="1" aria-pressed="${sel.has(i)}" aria-label="${esc(c.ch)}"><span>${esc(c.ch)}</span><small></small></button>`;
+        // a reused-phrase word-check span is a second marker set: own class + glyph (top-left, the idea glyph stays top-right), never merged into one state
+        const wcls = c.word ? (c.word === "missed" ? " wmiss" : " wsub") : "", wsup = c.wordStart ? `<sup class="hl-m wm hl-m-${c.word}" aria-hidden="true">${wordMark({ status: c.word }).marker}</sup>` : "", wsr = c.word ? `, ${c.word === "missed" ? "word left out" : "word differs from the script"}` : "";
+        if (c.mark) { const m = MARKS[c.mark]; return `<button type="button" class="rch ${m.cls}${wcls}" data-i="${i}" data-han="1" aria-pressed="${sel.has(i)}" aria-label="${esc(c.ch)}, ${m.sr}${wsr}"><span>${esc(c.ch)}</span><small></small><sup class="hl-m ${m.hm}" aria-hidden="true">${m.glyph}</sup>${wsup}</button>`; }
+        if (R && c.han) return `<button type="button" class="rch${wcls}" data-i="${i}" data-han="1" aria-pressed="${sel.has(i)}" aria-label="${esc(c.ch)}${wsr}"><span>${esc(c.ch)}</span><small></small>${wsup}</button>`;
         if (!c.han) return `<span class="rch plain" data-han="0" aria-hidden="true"><span>${esc(c.ch)}</span><small></small></span>`;
         const cls = c.review ? "review" : c.unsure ? "unsure" : "";
         const py = opts.showPinyin && c.pinyin ? formatPinyin(c.pinyin) : "";
@@ -144,14 +153,17 @@ export function createResultView({ onSave }) {
         const { placed } = placeIdeas(text, missing);
         placed.forEach((p) => { for (let i = p.start; i < p.end; i++) mark.set(i, "missing"); });
       }
-      const grid = chars.map((ch, i) => ({ ch, han: HAN.test(ch), pinyin: "", mark: mark.has(i) && HAN.test(ch) ? mark.get(i) : "" }));
-      return { grid, info, items, covered, missing, wording, suggested: info && info.status === "ok" ? info.suggestedWords : [] };
+      // reused-phrase word-check spans, aligned to the shown text (fall back to the first occurrence if the offsets don't line up with it)
+      const wspans = (a.wordStatus || []).map((w) => { let st = w.start, en = w.end; if (chars.slice(st, en).join("") !== w.text) { const at = text.indexOf(w.text); if (at < 0) return null; st = Array.from(text.slice(0, at)).length; en = st + Array.from(w.text).length; } return { ...w, start: st, end: en }; }).filter(Boolean);
+      const wk = wordKinds(text, wspans), wstart = new Set(wspans.map((w) => w.start));
+      const grid = chars.map((ch, i) => ({ ch, han: HAN.test(ch), pinyin: "", mark: mark.has(i) && HAN.test(ch) ? mark.get(i) : "", ...(wk[i] ? { word: wk[i], wordStart: wstart.has(i) } : {}) }));
+      return { grid, info, items, covered, missing, wording, suggested: info && info.status === "ok" ? info.suggestedWords.filter((w) => !(a.wordStatus || []).some((x) => x.text === w.text)) : [] };
     },
     /** Retell blocks: key ideas (missing, with a checklist-style list), wording notes, tone note, peek note. Re-run on every update (the coach streams in). */
     retell(S, opts) {
       const a = S.assessment, o = S.outcome(), R = this.retellData(S);
       const wrap = q("#retellWrap"); wrap.hidden = false;
-      const sig = JSON.stringify(R.grid.map((c) => c.mark));
+      const sig = JSON.stringify(R.grid.map((c) => c.mark + (c.word || "")));
       if (sig !== gridSig) { gridSig = sig; this.paintGrid(S, opts); renderSel(); }
       let html = "";
       const li = (kind, w, why, extra = "", save = "") => `<li class="idea is-${kind === "covered" ? "covered" : kind}"><span class="ib" aria-hidden="true">${kind === "covered" ? "\u2713" : MARKS[kind].glyph}</span><span class="w">${esc(w)}</span><span class="why">${esc(why)}</span><span class="sr-only">, ${esc(why)}</span>${extra}${save}</li>`;
@@ -173,7 +185,8 @@ export function createResultView({ onSave }) {
             const t = m.text || m.model;
             return li("missing", t || (m.explanation ? "(see note)" : "(unspecified)"), "Missing: not in what I heard", m.explanation ? `<div class="cx">${esc(m.explanation)}</div>` : "", t ? `<button type="button" class="btn ghost small js-save-idea" data-i="${i}">Save word</button>` : "");
           }).join("")}</ul><p class="muted idea-note">Your own wording is fine. These are meanings from the original that I didn't hear.</p>`;
-        } else if (o.state === "checked") html = coveredHtml + `<p class="idea-ok"><span class="badge">\u2713</span> ${esc(o.label)}</p><p class="muted idea-note">${esc(o.note)} I only report gaps, so covered ideas aren't ticked off one by one.</p>`;
+        } else if (o.state === "wordcheck") html = coveredHtml + `<p class="idea-ok"><span class="badge badge-pause">!</span> ${esc(o.label)}</p><p class="muted idea-note">${esc(o.note)}</p>`;
+        else if (o.state === "checked") html = coveredHtml + `<p class="idea-ok"><span class="badge">\u2713</span> ${esc(o.label)}</p><p class="muted idea-note">${esc(o.note)} I only report gaps, so covered ideas aren't ticked off one by one.</p>`;
         else html = `<p class="idea-none"><span class="badge badge-pause">?</span> ${esc(o.label)}</p>${o.note ? `<p class="muted idea-note">${esc(o.note)}</p>` : ""}`;
       }
       q("#ideaBody").innerHTML = html;

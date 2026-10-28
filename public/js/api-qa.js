@@ -14,6 +14,7 @@
 // no block / comparisonStatus != ok / no valid key points => "Could not compare"; the all-clear exists only when every key point is covered, answeredQuestion and canPraise.
 import { req, jsonOf, readSse, extFor, noteMock, ApiError } from "./api.js";
 import { normalizeRetellBlock, ideaKind } from "./retell.js";
+import { normalizeWordCheck, praiseGate, wordCheckVerdict, WORD_CHECK_NOTE, mergeRuns } from "./wordcheck.js";
 
 export const isUnsupported = (e) => !!e && (e.status === 404 || e.status === 501);
 const str = (v) => (typeof v === "string" ? v.trim() : "");
@@ -40,8 +41,11 @@ export function normalizeQuestion(raw, chunkText = "") {
 }
 
 /** assessment.qa -> {status:'ok'|'unavailable', reason, transcript, points[], covered, partial, missing, wrong, full, answered, answerKind, modelAnswer} | null (no block). Counts are re-derived, never trusted. */
-export function normalizeQaBlock(raw, chunkText = "", fallbackTranscript = "") {
+export function normalizeQaBlock(raw, chunkText = "", fallbackTranscript = "", extra = {}) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  // reused-phrase word check (855030d): assessment.wordStatus (+ facts, + the block's own praiseBlockedBy/wordCheck/canPraise) -> placed words + the praise gate
+  const wc = normalizeWordCheck(extra.wordStatus, chunkText, { chunkIndex: Number.isInteger(extra.chunkIndex) ? extra.chunkIndex : 0 });
+  const gate = praiseGate(raw, extra.facts), wordCount = Math.max(wc.total, gate.count);
   const wf = new Map((Array.isArray(raw.wrongFacts) ? raw.wrongFacts : []).filter((w) => w && typeof w.claimZh === "string").map((w) => [w.contradictsKeyPointId, w.claimZh.trim()]));
   const src = raw.keyPoints || raw.points || raw.ideas;
   const ideas = (Array.isArray(src) ? src : []).map((k) => {
@@ -56,7 +60,8 @@ export function normalizeQaBlock(raw, chunkText = "", fallbackTranscript = "") {
   const transcript = str(raw.transcript) || str(fallbackTranscript);
   const answerKind = ["answered", "dont_know", "off_topic"].includes(raw.answerKind) ? raw.answerKind : "";
   return { status: r.status, reason: r.reason, transcript, points: r.ideas, covered: r.covered, partial: r.partial, missing: r.missing, wrong: r.wrong,
-    full: r.full && raw.answeredQuestion !== false && !wrongFacts.length && (!praise || praise === "full"), wrongFacts, praise, suggestedWords: r.suggestedWords, answered: raw.answeredQuestion !== false && answerKind !== "dont_know" && answerKind !== "off_topic", answerKind, modelAnswer: str(raw.modelAnswerZh) || str(raw.answerZh) };
+    words: wc.words, wordCount, gate, meaningFull: r.fullMeaning && raw.answeredQuestion !== false && !wrongFacts.length,
+    full: r.fullMeaning && raw.answeredQuestion !== false && !wrongFacts.length && !gate.blocked && wordCount === 0 && (!praise || praise === "full"), wrongFacts, praise, suggestedWords: r.suggestedWords, answered: raw.answeredQuestion !== false && answerKind !== "dont_know" && answerKind !== "off_topic", answerKind, modelAnswer: str(raw.modelAnswerZh) || str(raw.answerZh) };
 }
 
 /** The verdict. Never an all-clear while a point is missing/partial or the comparison didn't run. */
@@ -73,6 +78,8 @@ export function qaOutcome(info) {
     return { state: "missing", count: bad, label, note: "Your own wording is fine. Try to include what's marked below.", badge: "!" };
   }
   if (info.partial > 0) return { state: "partial", count: info.partial, label: info.partial === 1 ? "1 point only partly covered" : `${info.partial} points only partly covered`, note: "Nothing is missing, but not everything was said in full.", badge: "~" };
+  if (info.wordCount > 0) return { state: "wordcheck", count: info.wordCount, label: wordCheckVerdict(info.wordCount, info.words, { sure: info.meaningFull }), note: WORD_CHECK_NOTE, badge: "!" };
+  if (info.gate && info.gate.blocked) return { state: "checked", label: "No missing points flagged", note: "The coach isn't giving a full all-clear for this one, so check the notes below.", badge: "~" };
   if (info.full) return { state: "covered", label: "All key points covered", note: "Compared by meaning: your own wording is fine.", badge: "\u2713" };
   return { state: "checked", label: "No missing points flagged", note: "I'm not fully sure about some points, so this isn't a full all-clear.", badge: "\u2713" };
 }
@@ -104,24 +111,26 @@ const MARK = {
 export const QA_MARKS = MARK;
 const RANK = { covered: 1, partial: 2, wrong: 3, missing: 4 };
 /** [{text, kind:''|covered|partial|wrong|missing}] runs over the chunk text. Points without valid offsets are simply not placed (they stay in the checklist). */
-export function segmentsOf(chunkText, info) {
+export function segmentsOf(chunkText, info, words = []) {
   const chars = cps(chunkText), kinds = new Array(chars.length).fill("");
   if (info && info.status === "ok") for (const p of info.points) if (p.start !== undefined) {
     const k = ideaKind(p);
     for (let i = p.start; i < Math.min(p.end, chars.length); i++) if (!kinds[i] || RANK[k] > RANK[kinds[i]]) kinds[i] = k;
   }
+  // word-check spans (reused-phrase check) are a second, independent marker set; runs split wherever either set changes
+  if (words && words.length) return mergeRuns(chunkText, kinds, words);
   const out = [];
   chars.forEach((c, i) => { const last = out[out.length - 1]; if (last && last.kind === kinds[i]) last.text += c; else out.push({ text: c, kind: kinds[i] }); });
   return out;
 }
-export const placedCount = (info) => (info && info.status === "ok" ? info.points.filter((p) => p.start !== undefined).length : 0);
+export const placedCount = (info) => (info && info.status === "ok" ? info.points.filter((p) => p.start !== undefined).length : 0) + (info && info.words ? info.words.length : 0);
 
 /** records: [{attempts, info, hints, answerShown, skipped}] (one per question) -> summary numbers. Only the LAST assessed attempt of a question counts for points. */
 export function summarize(records) {
   const s = { questions: records.length, answered: 0, unchecked: 0, skipped: 0, pointsCovered: 0, pointsTotal: 0, hints: 0, answers: 0 };
   for (const r of records) {
     s.hints += r.hints || 0; s.answers += r.answerShown ? 1 : 0;
-    if (r.attempts > 0) { s.answered++; if (r.info && r.info.status === "ok") { s.pointsCovered += r.info.covered; s.pointsTotal += r.info.points.length; } else s.unchecked++; }
+    if (r.attempts > 0) { s.answered++; if (r.info && r.info.wordCount > 0) s.wordChecks = (s.wordChecks || 0) + 1; if (r.info && r.info.status === "ok") { s.pointsCovered += r.info.covered; s.pointsTotal += r.info.points.length; } else s.unchecked++; }
     else if (r.skipped) s.skipped++;
   }
   return s;
@@ -156,10 +165,11 @@ export const qa = {
     return q;
   },
   /** Same contract as api.attempt(): resolves {replayed}; rejects ApiError. Re-call with the same attemptId to retry. onEvent(name, data). */
-  async attempt({ blob, mime, question, attemptId, voice, speed, signal, onEvent }) {
+  async attempt({ blob, mime, question, attemptId, chunkText, voice, speed, signal, onEvent }) {
     const fd = new FormData();
     fd.append("audio", blob, `take.${extFor(mime || blob.type || "")}`);
     fd.append("question", JSON.stringify(question.payload)); fd.append("attemptId", attemptId);
+    if (chunkText) fd.append("chunkText", chunkText);   // the FULL chunk of the key points (chunks[sourceChunkIndex], directions stripped): the saved word's sourceChunk is then the whole sentence
     if (voice) fd.append("voice", voice);
     if (speed) fd.append("speed", String(speed));
     const res = await req("POST", "/api/qa/attempt", { body: fd, signal });

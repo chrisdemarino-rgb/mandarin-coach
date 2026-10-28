@@ -422,3 +422,19 @@ body[data-view="qa"] #view-practice { display: none; }
   body[data-qa="1"][data-view="script"] #view-practice, body[data-qa="1"][data-view="saved"] #view-qa, body[data-qa="1"][data-view="settings"] #view-qa { display: none; }
   .qa-question { font-size: 34px !important; }
 }
+
+/* Reused-phrase word check (second marker set, independent of the key-idea marks; never colour-only: border style + line + glyph + sr text) */
+.rch.wsub { background: var(--sub-bg); border: 3px double var(--sub); }
+.rch.wsub > span { text-decoration: underline line-through double var(--sub); text-underline-offset: 4px; }
+.rch.wmiss { background: var(--ok-bg); border: 3px dotted var(--ok); }
+.rch.wmiss > span { text-decoration: underline dotted var(--ok); text-decoration-thickness: 4px; text-underline-offset: 4px; }
+.rch.rch .hl-m.wm { position: absolute; top: -6px; left: -4px; right: auto; font-size: 13px; line-height: 1; padding: 2px 5px; color: var(--card); }
+.rch.rch .hl-m.hl-m-substituted { background: var(--sub); }
+.rch.rch .hl-m.hl-m-missed { background: var(--ok); }
+.flag.wc.is-substituted { border-left: 5px double var(--sub); }
+.flag.wc.is-missed { border-left: 5px dotted var(--ok); }
+.flag.wc .why { flex: 1 1 100%; font-weight: 600; }
+.flag.wc.is-hedged .why { font-weight: 500; font-style: italic; }
+.flag.wc .cx { flex: 1 1 100%; color: var(--muted); font-size: 14px; }
+.flag.wc .btn { margin-left: auto; }
+.lg-w-sub .hl, .lg-w-missed .hl { padding: 0 3px; }

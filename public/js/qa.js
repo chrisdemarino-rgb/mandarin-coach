@@ -4,6 +4,7 @@
 // States: idle | loading | asking (question audio) | ready (tap to record) | listening | processing | result | finished.
 import * as api from "./api.js";
 import * as apiQa from "./api-qa.js";
+import { normalizeSavedMissed } from "./assess.js";
 import { countHanzi as hanCount } from "../shared/script.js";
 import { audio, ensureInit, startAudioFromTap, micError, MicError, RECORDING_PROBLEMS } from "./audio-io.js";
 import * as player from "./tts-player.js";
@@ -21,7 +22,7 @@ export function createQa(S) {
     answerPhase: "idle", questionPhase: "idle",   // "idle" | "loading" (fetching, button disabled) | "playing" (Stop toggle) | "error" (button says Tap to retry)
     coachLines: [], coachAudio: [], coachPlaying: false, questionPlaying: false,
     statusStage: "", error: null, notice: "", micArmed: false, recStart: 0, recording: null,
-    records: [], unsupported: false,
+    records: [], unsupported: false, savedMissed: [],
     subscribe(fn) { subs.add(fn); return () => subs.delete(fn); },
     emit() { subs.forEach((fn) => { try { fn(Q); } catch (e) { console.error(e); } }); },
     get active() { return !["idle", "finished"].includes(Q.state); },
@@ -37,7 +38,7 @@ export function createQa(S) {
   const stopAudio = () => { try { audio.stop(); } catch { /* ignore */ } Q.coachPlaying = false; Q.questionPlaying = false; Q.answerPlaying = false; Q.answerPhase = "idle"; Q.questionPhase = "idle"; };
   const settings = () => S.store.settings;
   function resetAttempt() {
-    Q.info = null; Q.transcript = ""; Q.outcome = null; Q.assessment = null; Q.coachLines = []; Q.coachAudio = []; Q.statusStage = ""; Q.error = null; Q.notice = ""; attemptId = null;
+    Q.info = null; Q.transcript = ""; Q.outcome = null; Q.assessment = null; Q.savedMissed = []; Q.coachLines = []; Q.coachAudio = []; Q.statusStage = ""; Q.error = null; Q.notice = ""; attemptId = null;
     if (Q.recording && Q.recording.url) URL.revokeObjectURL(Q.recording.url); Q.recording = null;
   }
   function resetQuestion() { resetAttempt(); Q.hintsShown = 0; Q.answerShown = false; Q.answerPhase = "idle"; Q.questionPhase = "idle"; }
@@ -196,12 +197,12 @@ export function createQa(S) {
   async function submit() {
     abortFlow(); const r = run; ac = new AbortController();
     const q = Q.question; if (!q || !Q.recording) return;
-    Q.state = "processing"; Q.error = null; Q.info = null; Q.outcome = null; Q.coachLines = []; Q.coachAudio = []; Q.emit();
+    Q.state = "processing"; Q.error = null; Q.info = null; Q.outcome = null; Q.savedMissed = []; Q.coachLines = []; Q.coachAudio = []; Q.emit();
     try { audio.markProcessing(); } catch { /* ignore */ }
-    let terminalError = null, assessment = null;
+    let terminalError = null, assessment = null, doneData = null, lateWords = null;
     try {
       await apiQa.qa.attempt({
-        blob: Q.recording.blob, mime: Q.recording.mime, question: q, attemptId, voice: settings().voice, speed: settings().speed, signal: ac.signal,
+        blob: Q.recording.blob, mime: Q.recording.mime, question: q, attemptId, chunkText: Q.chunkText, voice: settings().voice, speed: settings().speed, signal: ac.signal,
         onEvent: (name, data) => {
           if (!alive(r)) return;
           data = data || {};
@@ -209,6 +210,8 @@ export function createQa(S) {
           else if (name === "assessment") assessment = data;
           else if (name === "coach_text") Q.coachLines[data.index] = { role: data.role || "", text: (Q.coachLines[data.index]?.text || "") + (data.delta || ""), caption: data.caption || Q.coachLines[data.index]?.caption || "" };
           else if (name === "coach_audio") { Q.coachAudio[data.index] = { url: data.url, text: data.text }; queueCoachAudio(r, data.url); }
+          else if (name === "word_status") lateWords = Array.isArray(data) ? data : data.wordStatus || data.words || null;
+          else if (name === "done") doneData = data;
           else if (name === "error") terminalError = data;
           Q.emit();
         },
@@ -229,11 +232,15 @@ export function createQa(S) {
       Q.state = "ready"; Q.error = { kind: "assess", action: er.retryable && !["no_speech_detected", "qa_answer_too_long"].includes(er.code) ? "reupload" : "rerecord", message: er.message, retryable: er.retryable, canSkip: terminalError.canSkip !== false }; Q.emit(); return;
     }
     if (!assessment) { Q.state = "ready"; Q.error = { kind: "assess", action: "reupload", message: "No assessment obtained: the server ended the response without a result.", canSkip: true }; Q.emit(); return; }
-    applyAssessment(assessment);
+    applyAssessment(assessment, doneData, lateWords);
   }
 
-  function applyAssessment(a) {
-    const info = apiQa.normalizeQaBlock(a.qa, Q.chunkText, a.transcript);
+  function applyAssessment(a, done, lateWords) {
+    // reused-phrase word check: assessment.wordStatus (or a late word_status / done.wordStatus) + facts feed the SAME block normaliser; savedMissed = what the server added to Words to practise
+    const ws = Array.isArray(a.wordStatus) && a.wordStatus.length ? a.wordStatus : lateWords || (done && done.wordStatus) || [];
+    const info = apiQa.normalizeQaBlock(a.qa, Q.chunkText, a.transcript, { wordStatus: ws, facts: a.facts, chunkIndex: Q.question && Number.isInteger(Q.question.payload && Q.question.payload.sourceChunkIndex) ? Q.question.payload.sourceChunkIndex : 0 });
+    Q.savedMissed = [...new Set([...normalizeSavedMissed(a.savedMissed), ...normalizeSavedMissed(done && done.savedMissed)])];
+    if (Q.savedMissed.length || (info && info.wordCount)) { try { S.loadMissed(); } catch { /* the list refreshes on the next visit */ } }
     Q.assessment = a; Q.info = info; Q.transcript = (info && info.transcript) || (typeof a.transcript === "string" ? a.transcript.trim() : "");
     Q.outcome = apiQa.qaOutcome(info);
     const rec = Q.rec;

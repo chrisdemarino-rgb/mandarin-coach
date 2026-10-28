@@ -13,7 +13,7 @@ t("splitCorrections: omission->missing, wording kinds->wording, tone/model stay 
   const r = splitCorrections([omission("公园"), { kind: "wording", targetText: "做练习", modelText: "练习" }, { kind: "tone", targetText: "天" }, { kind: "model" }, null, "x", { kind: "unnatural_wording", targetText: "a" }]);
   assert.equal(r.missing.length, 1); assert.equal(r.missing[0].text, "公园");
   assert.equal(r.wording.length, 2); assert.equal(r.other.length, 2);
-  assert.deepEqual(splitCorrections(undefined), { missing: [], wording: [], other: [] });
+  assert.deepEqual(splitCorrections(undefined), { missing: [], wording: [], other: [], words: [] });
 });
 
 t("normalizeKeyIdeas: tolerant of garbage, accepts covered bool or status", () => {

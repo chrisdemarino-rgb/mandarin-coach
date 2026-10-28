@@ -3,6 +3,8 @@ import { $, $$, esc, formatPinyin, announce, fmtTime } from "./dom.js";
 import { QA_MARKS, segmentsOf, placedCount } from "../api-qa.js";
 import { ideaKind } from "../retell.js";
 import { createHearMine } from "../hear-mine.js";
+import { wordCheckRows, WORD_LEGEND } from "./wordcheck.js";
+import { wordMark } from "../wordcheck.js";
 
 const STAGE = { uploading: "Uploading your answer…", transcribing: "Writing down what you said…", assessing: "Checking your answer…", coaching: "Checking the meaning against the script…" };
 
@@ -32,7 +34,7 @@ export function initQaUI(Q, S, { onLeave, onSave = () => {} }) {
   const hearMine = createHearMine($("#btnQaHearMine"), { getTake: () => (Q.state === "result" ? Q.recording : null), blocked: () => Q.state !== "result" || Q.coachPlaying || Q.questionPhase === "loading" || Q.answerPhase === "loading" });
   $("#btnQaHearCoach").addEventListener("click", () => (Q.coachPlaying ? Q.stopCoach() : Q.replayCoach()));
 
-  const OUT_CLASS = { covered: "s-good", checked: "s-good", partial: "s-review", missing: "s-review", unchecked: "s-none" };
+  const OUT_CLASS = { covered: "s-good", checked: "s-good", partial: "s-review", missing: "s-review", unchecked: "s-none", wordcheck: "s-review" };
 
   function primaryLabel() {
     switch (Q.state) {
@@ -48,10 +50,15 @@ export function initQaUI(Q, S, { onLeave, onSave = () => {} }) {
     return "Start";
   }
 
-  const segHtml = (chunkText, info) => segmentsOf(chunkText, info).map((seg) => {
-    if (!seg.kind) return esc(seg.text);
+  // Two independent marker sets on one text: key points (outer span + glyph) and the reused-phrase word check (inner span + its own glyph after the word).
+  const segHtml = (chunkText, info) => segmentsOf(chunkText, info, info && info.words).map((seg) => {
+    let inner = esc(seg.text);
+    if (seg.word) inner = `<span class="hl hl-${seg.word}" data-word="${seg.word}">${inner}</span>`;
+    const wm = seg.word && seg.endsWord ? wordMark({ status: seg.word }) : null;
+    const wordSup = wm ? `<sup class="hl-m hl-m-${seg.word}" aria-hidden="true">${wm.marker}</sup><span class="sr-only">, ${seg.word === "missed" ? "word left out" : "word differs from the script"}</span>` : "";
+    if (!seg.kind) return inner + wordSup;
     const m = QA_MARKS[seg.kind];
-    return `<span class="hl ${m.cls}" data-status="${seg.kind}">${esc(seg.text)}</span><sup class="hl-m hl-m-${seg.kind === "covered" ? "covered" : seg.kind === "missing" ? "missed" : seg.kind}" aria-hidden="true">${m.glyph}</sup><span class="sr-only">, ${m.label}</span>`;
+    return `<span class="hl ${m.cls}" data-status="${seg.kind}">${inner}</span><sup class="hl-m hl-m-${seg.kind === "covered" ? "covered" : seg.kind === "missing" ? "missed" : seg.kind}" aria-hidden="true">${m.glyph}</sup><span class="sr-only">, ${m.label}</span>${wordSup}`;
   }).join("");
 
   function render() {
@@ -127,10 +134,16 @@ export function initQaUI(Q, S, { onLeave, onSave = () => {} }) {
       const placed = placedCount(info);
       $("#qaSourceWrap").hidden = !placed;
       $("#qaSource").innerHTML = placed ? segHtml(Q.chunkText, info) : "";
+      const words = (info && info.words) || [], sugg = (info && info.suggestedWords) || [];
+      $("#qaWordWrap").hidden = !words.length && !Q.savedMissed.length;
+      $("#qaWordList").innerHTML = wordCheckRows(words, { meaningOf: (w) => (sugg.find((x) => x.text === w.text) || {}).meaning || "" });
+      $("#qaWordList").onclick = (e) => { const b = e.target.closest(".js-save-wc"); const w = b && words[+b.dataset.i]; if (w) onSave({ text: w.text, pinyin: w.pinyin, meaning: (sugg.find((x) => x.text === w.text) || {}).meaning || "" }); };
+      const sn = $("#qaSavedNote"); sn.hidden = !Q.savedMissed.length; sn.textContent = Q.savedMissed.length ? `Added to Words to practise: ${Q.savedMissed.join(", ")}` : "";
+      $("#qaSourceLegend").hidden = !words.length; $("#qaSourceLegend").innerHTML = words.length ? WORD_LEGEND : "";
       const wf = (info && info.status === "ok" && info.wrongFacts) || [];
       const ck = $("#qaCheck"); ck.hidden = !wf.length;
       ck.innerHTML = wf.length ? `<strong>Check this:</strong> ${wf.map((w) => `you said <span lang="zh-CN">“${esc(w.claim)}”</span>${w.about ? `, but the script says <span lang="zh-CN">“${esc(w.about)}”</span>` : ", which differs from the script"}`).join("; ")}.` : "";
-      const sw = (info && info.status === "ok" && info.suggestedWords) || [];
+      const sw = ((info && info.status === "ok" && info.suggestedWords) || []).filter((w) => !words.some((x) => x.text === w.text));   // words already in the Word check have their own Save word button
       $("#qaSuggestWrap").hidden = !sw.length;
       $("#qaSuggest").innerHTML = sw.map((w, i) => `<li class="sw"><span class="w" lang="zh-CN">${esc(w.text)}</span>${w.pinyin ? `<span class="py">${esc(w.pinyin)}</span>` : ""}${w.meaning ? `<span class="why">${esc(w.meaning)}</span>` : ""}<button type="button" class="btn ghost small js-save-qsw" data-i="${i}" aria-label="Save word ${esc(w.text)}">Save word</button></li>`).join("");
       $("#qaSuggest").onclick = (e) => { const b = e.target.closest(".js-save-qsw"); const w = b && sw[+b.dataset.i]; if (w) onSave({ text: w.text, pinyin: w.pinyin, meaning: w.meaning }); };
@@ -154,7 +167,7 @@ export function initQaUI(Q, S, { onLeave, onSave = () => {} }) {
         ? `<h2>Q&amp;A isn't available yet</h2><p class="muted">The server doesn't have the Q&amp;A feature yet. Nothing was recorded. Try again once the backend has it.</p>`
         : !s.questions ? `<h2>Q&amp;A finished</h2><p class="muted">No questions were asked.</p>`
         : `<h2>Q&amp;A summary</h2><div class="stats"><div class="stat"><b>${s.answered}</b>question${s.answered === 1 ? "" : "s"} answered</div><div class="stat"><b>${s.pointsTotal ? `${s.pointsCovered} of ${s.pointsTotal}` : "n/a"}</b>key points covered</div><div class="stat"><b>${s.hints}</b>hint${s.hints === 1 ? "" : "s"} used</div><div class="stat"><b>${s.answers}</b>answer${s.answers === 1 ? "" : "s"} shown</div></div>`
-          + `<p class="muted">${s.pointsTotal ? "Key points are counted from your last checked answer to each question." : "No answer could be compared, so no key points are counted."}${s.unchecked ? ` ${s.unchecked} answer${s.unchecked === 1 ? "" : "s"} could not be compared.` : ""}${s.skipped ? ` ${s.skipped} question${s.skipped === 1 ? "" : "s"} skipped.` : ""}</p>`;
+          + `<p class="muted">${s.pointsTotal ? "Key points are counted from your last checked answer to each question." : "No answer could be compared, so no key points are counted."}${s.unchecked ? ` ${s.unchecked} answer${s.unchecked === 1 ? "" : "s"} could not be compared.` : ""}${s.skipped ? ` ${s.skipped} question${s.skipped === 1 ? "" : "s"} skipped.` : ""}${s.wordChecks ? ` ${s.wordChecks} answer${s.wordChecks === 1 ? "" : "s"} used a word that differs from the script.` : ""}</p>`;
     }
 
     hearMine.sync();

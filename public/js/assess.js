@@ -4,6 +4,7 @@
 
 import { normalizeWordStatus, problemWords, problemSummary } from "./highlight.js";
 import { normalizeRetellBlock } from "./retell.js";
+import { normalizeWordCheck, praiseGate } from "./wordcheck.js";
 
 const HAN = /[\u3400-\u9fff]/;
 
@@ -58,12 +59,13 @@ export function normalizeAssessment(data, fallbackText = "") {
   // Policy gate (wrong sentence / no speech): no highlights, no verdict, "try again".
   const gated = ok && (d.gate === "low_match" || d.matchesText === false);
   const chunkText = fallbackText || referenceText;
-  const wordStatus = ok && !gated && !retell ? normalizeWordStatus(d.wordStatus, chunkText) : [];
+  // retell: wordStatus is only the reused-phrase word check (substituted/missed script words inside a near-verbatim reuse); empty otherwise
+  const wordStatus = ok && !gated ? (retell ? normalizeWordCheck(d.wordStatus, chunkText).words : normalizeWordStatus(d.wordStatus, chunkText)) : [];
   const facts = d.facts || {};
   return {
     gated, gateMessage: gated ? d.gateMessage || "That recording doesn't seem to match the sentence. Please say it again." : "",
     wordStatus, chunkText, insertedText: typeof facts.insertedText === "string" ? facts.insertedText : Array.isArray(facts.insertedText) ? facts.insertedText.join(" ") : "",
-    savedMissed: normalizeSavedMissed(d.savedMissed), retell, toneShown: toneOk, retellInfo: retell ? normalizeRetellBlock(d.retell, chunkText) : null,
+    savedMissed: normalizeSavedMissed(d.savedMissed), wordGate: praiseGate(d.retell || d.qa, d.facts), retell, toneShown: toneOk, retellInfo: retell ? normalizeRetellBlock(d.retell, chunkText) : null,
     keyIdeas: Array.isArray(d.keyIdeas) ? d.keyIdeas : Array.isArray(d.facts && d.facts.keyIdeas) ? d.facts.keyIdeas : [],
     canPraise: facts.canPraise !== false, completeness: typeof facts.completeness === "string" ? facts.completeness : "",   // canPraise:false => never "all correct"
     ok, status: ok ? "ok" : "unavailable", engine: d.engine || "", mock: d.mock === true, modelVersion: d.modelVersion || "",
@@ -94,7 +96,7 @@ export function normalizeSavedMissed(v) {
 /** A `word_status` event (or late wordStatus) arriving after the assessment. Mutates `a`; ignored for gated takes. */
 export function applyWordStatus(a, list) {
   if (!a || !a.ok || a.gated) return a;
-  a.wordStatus = normalizeWordStatus(list, a.chunkText);
+  a.wordStatus = a.retell ? normalizeWordCheck(list, a.chunkText).words : normalizeWordStatus(list, a.chunkText);
   return a;
 }
 

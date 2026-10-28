@@ -8,16 +8,18 @@
 // Rules: the transcript is never tone evidence; scripted-speech scores are not shown; tone info only when flagged lowConfidence; never an all-clear
 // while key ideas are missing or the meaning was not checked; never claim coverage the backend did not report.
 import { normalizeWordStatus } from "./highlight.js";
+import { praiseGate, wordCheckVerdict, WORD_CHECK_NOTE } from "./wordcheck.js";
 
 const MISSING_KINDS = new Set(["omission", "missing", "missing_idea", "wrong_meaning", "key_idea", "idea"]);
 const WORDING_KINDS = new Set(["language", "wording", "unnatural", "unnatural_wording", "wrong_wording", "wrong_word"]);
 
 /** Split coach corrections into what the retell result shows in separate places. Order preserved. */
 export function splitCorrections(corrections) {
-  const out = { missing: [], wording: [], other: [] };
+  const out = { missing: [], wording: [], words: [], other: [] };
   for (const c of Array.isArray(corrections) ? corrections : []) {
     if (!c || typeof c !== "object") continue;
     const kind = String(c.kind || "").toLowerCase();
+    if (kind === "substituted" || /^reuse:/.test(String(c.factRef || ""))) { out.words.push(c); continue; }   // reused-phrase word check: shown in the Word check, never as a missing idea
     const item = { kind, text: String(c.targetText || ""), model: String(c.modelText || ""), explanation: String(c.explanationZh || ""), caption: c.caption || "", heard: String(c.heard || ""), ideaId: c.ideaId || "", start: c.start, end: c.end, raw: c };
     if (MISSING_KINDS.has(kind)) out.missing.push(item);
     else if (WORDING_KINDS.has(kind)) out.wording.push(item);
@@ -44,12 +46,14 @@ export function normalizeRetellBlock(raw, chunkText = "") {
   }).filter(Boolean);
   const status = raw.comparisonStatus === "ok" && ideas.length ? "ok" : "unavailable";
   const n = (f) => ideas.filter(f).length;
-  const full = status === "ok" && n((x) => x.covered === true) === ideas.length && ideas.every((x) => x.confidence !== "low") && raw.canPraise !== false;
+  const gate = praiseGate(raw);   // word check / canPraise:false / praiseLevel soft|none => never a full all-clear
+  const fullMeaning = status === "ok" && n((x) => x.covered === true) === ideas.length && ideas.every((x) => x.confidence !== "low");
+  const full = fullMeaning && !gate.blocked;
   const tone = raw.tone && typeof raw.tone === "object" ? { status: String(raw.tone.status || ""), reason: String(raw.tone.reason || "") } : { status: "", reason: "" };
   const suggestedWords = (Array.isArray(raw.suggestedWords) ? raw.suggestedWords : []).filter((w) => w && typeof w.text === "string" && w.text.trim())
-    .map((w) => ({ text: w.text.trim(), pinyin: typeof w.pinyin === "string" ? w.pinyin : "", meaning: typeof w.meaning === "string" ? w.meaning : "", ideaId: w.ideaId || "" })).slice(0, 6);
+    .map((w) => ({ text: w.text.trim(), pinyin: typeof w.pinyin === "string" ? w.pinyin : "", meaning: typeof w.meaning === "string" ? w.meaning : "", ideaId: w.ideaId || "", reason: typeof w.reason === "string" ? w.reason : "" })).slice(0, 6);
   return { status, reason: String(raw.comparisonReason || ""), ideas, covered: n((x) => x.covered === true), partial: n((x) => x.covered === "partial"), missing: n((x) => x.covered === false && !x.issue),
-    wrong: n((x) => x.covered === false && !!x.issue), full, tone, model: typeof raw.model === "string" ? raw.model : "", suggestedWords };
+    wrong: n((x) => x.covered === false && !!x.issue), full, fullMeaning, gate, tone, model: typeof raw.model === "string" ? raw.model : "", suggestedWords };
 }
 /** covered | partial | missing | wrong */
 export const ideaKind = (i) => (i.covered === true ? "covered" : i.covered === "partial" ? "partial" : i.issue ? "wrong" : "missing");
@@ -119,6 +123,9 @@ export function retellOutcome({ assessment: a, corrections, keyIdeas, streamEnde
       return { state: "missing", count: bad, label, note: "Your own wording is fine. Try to include what's marked below.", badge: "!" };
     }
     if (info.partial > 0) return { state: "partial", count: info.partial, label: info.partial === 1 ? "1 idea only partly covered" : `${info.partial} ideas only partly covered`, note: "Nothing is missing, but not everything was said in full.", badge: "~" };
+    const wn = Math.max(info.gate ? info.gate.count : 0, a.wordGate ? a.wordGate.count : 0, a.wordStatus ? a.wordStatus.length : 0);
+    if (wn > 0) return { state: "wordcheck", count: wn, label: wordCheckVerdict(wn, a.wordStatus, { sure: info.fullMeaning }), note: WORD_CHECK_NOTE, badge: "!" };
+    if ((info.gate && info.gate.blocked) || (a.wordGate && a.wordGate.blocked) || a.canPraise === false) return { state: "checked", label: "No missing ideas flagged", note: "The coach isn't giving a full all-clear for this one, so check the notes below.", badge: "~" };
     if (info.full) return { state: "covered", label: "All key ideas covered", note: "Compared by meaning: your own wording is fine.", badge: "\u2713" };
     return { state: "checked", label: "No missing ideas flagged", note: "I'm not fully sure about some ideas, so this isn't a full all-clear.", badge: "\u2713" };
   }
@@ -130,6 +137,7 @@ export function retellOutcome({ assessment: a, corrections, keyIdeas, streamEnde
   if (!streamEnded) return { state: "pending", label: "Checking the meaning…", note: "", badge: "?" };
   const coached = summary && typeof summary.coached === "boolean" ? summary.coached : !coachSkipped;
   if (coachSkipped || !coached) return { state: "unchecked", label: "I couldn't check the meaning this time", note: "Nothing is marked as covered. Try again for coach feedback.", badge: "?" };
+  if (a.wordStatus && a.wordStatus.length) return { state: "wordcheck", count: a.wordStatus.length, label: wordCheckVerdict(a.wordStatus.length, a.wordStatus, { sure: false }), note: WORD_CHECK_NOTE, badge: "!" };
   return { state: "checked", label: "No missing ideas flagged", note: "The coach compared the meaning with the original. This is not a full marking: wording changes are fine.", badge: "\u2713" };
 }
 

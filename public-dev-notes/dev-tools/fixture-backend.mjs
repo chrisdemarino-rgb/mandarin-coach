@@ -13,6 +13,7 @@ const NEEDED = 3;
 const mode = { attempt: "issues", drill: "correct", unsupported: false, retell: "", qa: "missing", qaHints: "backend", qaAnswer: "assessment", qaUnsupported: false, qaTranscript: "" };   // retell: "" | "tone_flagged" | "tone_unflagged" | "legacy" (only touches basis:"transcript" assessments)
 let words = [];  // {id,text,pinyin,meaning,missCount,correctStreak,needed,lastMissedAt,sourceChunk,status}
 let seq = 0, attemptNo = 0, drillNo = 0;
+const last = { qaChunkText: null, qaFields: [], attemptChunkText: null };   // what the frontend sent (GET /__fixture/last)
 const seen = new Map();   // attemptId -> response body (replay)
 
 const readBody = (req) => new Promise((res) => { const c = []; req.on("data", (d) => c.push(d)); req.on("end", () => res(Buffer.concat(c))); });
@@ -62,8 +63,10 @@ function transformAttempt(body, chunkText, attemptId) {
   const blocks = body.replace(/\r\n/g, "\n").split("\n\n").filter(Boolean);
   const ws = wordsOf(chunkText);
   const flagged = [];
+  let wcInfo = null;
   const out = blocks.map((b) => {
     const nm = (b.match(/^event: (.+)$/m) || [])[1];
+    if (nm === "done" && wcInfo) { const dd = JSON.parse((b.match(/^data: (.*)$/m) || [])[1] || "{}"); dd.corrections = [{ kind: wcInfo.status, targetText: wcInfo.text, heard: wcInfo.heard, start: wcInfo.start, end: wcInfo.end, factRef: "reuse:0", source: "server_fact" }]; return `event: done\ndata: ${JSON.stringify(dd)}`; }
     if (nm !== "assessment") return b;
     const dm = b.match(/^data: (.*)$/m); const d = strip(JSON.parse(dm[1]));
     if (d.basis === "transcript" && mode.retell) {
@@ -72,6 +75,15 @@ function transformAttempt(body, chunkText, attemptId) {
         d.facts = { ...(d.facts || {}), confirmedToneErrors: [{ index: 0, char: han[0], pinyin: pinyinOf(han[0]), expectedTone: 3, heardTone: 4, ref: "t0" }] };
         if (Array.isArray(d.syllables) && d.syllables[0]) d.syllables[0].tone = { ...(d.syllables[0].tone || {}), decision: "review", expected: 3, heard: 4 };
         if (mode.retell === "tone_unflagged") delete d.lowConfidence;
+      }
+      if (mode.retell.startsWith("wordcheck")) {   // reused-phrase word check (backend 855030d): one script word swapped; praise blocked everywhere
+        const hanIdx = [...chunkText].map((c, i) => (HAN.test(c) ? i : -1)).filter((i) => i >= 0), st = hanIdx[Math.min(2, hanIdx.length - 2)], text = [...chunkText].slice(st, st + 2).join("");
+        const hi = mode.retell === "wordcheck_medium" ? "medium" : "high", status = mode.retell === "wordcheck_missed" ? "missed" : "substituted";
+        d.wordStatus = [{ start: st, end: st + 2, text, pinyin: pinyinOf(text, false), status, ...(status === "missed" ? { reason: "omitted" } : { heard: "谩骂" }), source: "stt", confidence: status === "missed" ? "medium" : hi, detail: "fixture", reuse: true }];
+        d.facts = { ...(d.facts || {}), substitutedWords: status === "substituted" ? [{ ref: "reuse:0", text, start: st, end: st + 2, heard: "谩骂", confidence: hi }] : [], missingWords: status === "missed" ? [{ ref: "reuse:0", text, start: st, end: st + 2 }] : [], completeness: "incomplete", canPraise: false, reusedPhrase: { findings: 1, inserted: [] } };
+        d.savedMissed = [addMissed(text, chunkText)].map((w) => ({ id: w.id, text: w.text, pinyin: w.pinyin, meaning: null, reason: status, start: st, end: st + 2, missCount: w.missCount, isNew: true }));
+        if (d.retell) { d.retell.canPraise = false; d.retell.praiseLevel = "soft"; d.retell.praiseBlockedBy = ["word_check"]; d.retell.wordCheck = { status: "found", count: 1 }; d.retell.suggestedWords = [{ text, pinyin: pinyinOf(text), meaning: "fixture meaning", reason: status === "missed" ? "omitted" : "substituted", ideaId: "i1" }, ...(d.retell.suggestedWords || [])].slice(0, 3); }
+        wcInfo = { text, start: st, end: st + 2, heard: "谩骂", status };
       }
       if (mode.retell === "legacy") delete d.retell;   // pre-`retell`-block backend: the UI must fall back to omission corrections
       return `event: assessment\ndata: ${JSON.stringify(d)}`;
@@ -98,6 +110,7 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://x");
   const p = url.pathname;
   try {
+    if (p === "/__fixture/last") return json(res, 200, last);
     if (p === "/__fixture/mode" && req.method === "POST") {
       const b = JSON.parse((await readBody(req)).toString() || "{}");
       if (b.reset) { words = []; seq = 0; attemptNo = 0; drillNo = 0; seen.clear(); }
@@ -169,6 +182,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && p === "/api/qa/attempt") {
       const buf = await readBody(req);
       const attemptId = field(buf, "attemptId"), q = JSON.parse(field(buf, "question") || "null");
+      last.qaChunkText = field(buf, "chunkText") || null; last.qaFields = [...buf.toString("latin1").matchAll(/name="([^"]+)"/g)].map((m) => m[1]);
       if (seen.has(attemptId)) { res.writeHead(200, { "Content-Type": "text/event-stream", "X-Attempt-Replayed": "true" }); return res.end(seen.get(attemptId)); }
       const ev = (n, d) => `event: ${n}\ndata: ${JSON.stringify(d)}\n\n`;
       let body;
@@ -182,18 +196,21 @@ const server = http.createServer(async (req, res) => {
         const kps = q.keyPoints.map((k, i) => ({ ...k, covered: cov[i] === undefined ? true : cov[i], evidence: cov[i] === false ? null : "我说了这个意思", confidence: "high", ...(mode.qa === "wrong" && i === 1 ? { issue: "wrong_fact" } : {}) }));
         const unavailable = mode.qa === "unavailable";
         const answered = mode.qa !== "dont_know";
+        const wc = mode.qa.startsWith("wordcheck");
+        let wcw = null;
+        if (wc) { const k0 = q.keyPoints[0], text = [...k0.textZh].slice(0, 2).join(""); wcw = { start: k0.refStart, end: k0.refStart + 2, text, pinyin: pinyinOf(text, false), status: mode.qa === "wordcheck_missed" ? "missed" : "substituted", ...(mode.qa === "wordcheck_missed" ? { reason: "omitted" } : { heard: "谩骂" }), source: "stt", confidence: mode.qa === "wordcheck_medium" || mode.qa === "wordcheck_missed" ? "medium" : "high", detail: "fixture", reuse: true, chunkIndex: 0, keyPointId: k0.id }; }
         const wrongFacts = mode.qa === "wrong" ? [{ claimZh: "我觉得是别的", contradictsKeyPointId: "k2", confidence: "high" }] : [];
         const missing = kps.filter((x) => x.covered === false);
-        const full = !unavailable && answered && kps.every((x) => x.covered === true);
+        const full = !unavailable && answered && !wc && kps.every((x) => x.covered === true);
         const qa = unavailable
           ? { questionId: q.questionId, transcript, sttStatus: "ok", tone: { status: "skipped" }, modelAnswerZh: q.modelAnswerZh, keyPoints: q.keyPoints.map((k) => ({ ...k, covered: null, evidence: null, confidence: null })), coveredCount: 0, totalCount: q.keyPoints.length, partialCount: 0, wrongFacts: [], answeredQuestion: null, answerKind: null, canPraise: false, praiseLevel: "none", comparisonStatus: "unavailable", comparisonReason: "malformed_output", missingKeyPointIds: [], suggestedWords: [] }
-          : { questionId: q.questionId, transcript, sttStatus: "ok", tone: { status: "skipped", reason: "transcript_has_digits_or_latin" }, modelAnswerZh: q.modelAnswerZh, keyPoints: kps, coveredCount: kps.filter((x) => x.covered === true).length, totalCount: kps.length, partialCount: kps.filter((x) => x.covered === "partial").length, wrongFacts, answeredQuestion: answered, answerKind: answered ? "answered" : "dont_know", canPraise: full, praiseLevel: full ? "full" : missing.length || !answered ? "none" : "soft", comparisonStatus: "ok", comparisonReason: null, missingKeyPointIds: missing.map((x) => x.id), suggestedWords: missing.slice(0, 1).map((k) => ({ text: [...k.textZh].slice(0, 2).join(""), pinyin: pinyinOf([...k.textZh].slice(0, 2).join(""), false), meaning: null, keyPointId: k.id })) };
-        const lines = unavailable ? ["这次没能检查你的回答。", "再试一次，或者下一个问题。"] : !answered ? ["没关系，这个问题还没答出来。", "想要提示，就点提示；也可以再试一次。"] : full ? ["回答得很好，要点都讲到了。", "来下一个问题吧。"] : ["有一个要点没讲到。", `漏掉了这个要点：${(missing[0] || kps[1] || kps[0]).textZh}`, "再试一次，或者下一个问题。"];
+          : { questionId: q.questionId, transcript, sttStatus: "ok", tone: { status: "skipped", reason: "transcript_has_digits_or_latin" }, modelAnswerZh: q.modelAnswerZh, keyPoints: kps, coveredCount: kps.filter((x) => x.covered === true).length, totalCount: kps.length, partialCount: kps.filter((x) => x.covered === "partial").length, wrongFacts, answeredQuestion: answered, answerKind: answered ? "answered" : "dont_know", canPraise: full, praiseLevel: full ? "full" : missing.length || !answered ? "none" : "soft", ...(wc ? { praiseBlockedBy: ["word_check"], wordCheck: { status: "found", count: 1 } } : {}), comparisonStatus: "ok", comparisonReason: null, missingKeyPointIds: missing.map((x) => x.id), suggestedWords: missing.slice(0, 1).map((k) => ({ text: [...k.textZh].slice(0, 2).join(""), pinyin: pinyinOf([...k.textZh].slice(0, 2).join(""), false), meaning: null, keyPointId: k.id })) };
+        const lines = wc ? ["有个词和原文不一样。", `你说的是“${wcw.heard || ""}”，原文是“${wcw.text}”。`, `应该这样说：${wcw.text}`, "来下一个问题吧。"] : unavailable ? ["这次没能检查你的回答。", "再试一次，或者下一个问题。"] : !answered ? ["没关系，这个问题还没答出来。", "想要提示，就点提示；也可以再试一次。"] : full ? ["回答得很好，要点都讲到了。", "来下一个问题吧。"] : ["有一个要点没讲到。", `漏掉了这个要点：${(missing[0] || kps[1] || kps[0]).textZh}`, "再试一次，或者下一个问题。"];
         body = ev("status", { stage: "transcribing" }) + ev("status", { stage: "assessing", detail: "answer" })
-          + ev("assessment", { status: "ok", engine: "mock", mock: true, lowConfidence: true, basis: "transcript", transcript, transcriptDerived: true, qa })
+          + ev("assessment", { status: "ok", engine: "mock", mock: true, lowConfidence: true, basis: "transcript", transcript, transcriptDerived: true, qa, ...(wc ? { wordStatus: [wcw], facts: { substitutedWords: wcw.status === "substituted" ? [{ ref: "reuse:0", text: wcw.text, start: wcw.start, end: wcw.end, heard: wcw.heard, chunkIndex: 0, keyPointId: wcw.keyPointId }] : [], missingWords: wcw.status === "missed" ? [{ ref: "reuse:0", text: wcw.text }] : [], completeness: "incomplete", canPraise: false, reusedPhrase: { findings: 1, inserted: [] } }, savedMissed: [(() => { const w = addMissed(wcw.text, last.qaChunkText || ""); return { id: w.id, text: w.text, pinyin: wcw.pinyin, meaning: null, reason: wcw.status, start: wcw.start, end: wcw.end, missCount: w.missCount, isNew: true }; })()] } : {}) })
           + ev("status", { stage: "coaching" })
           + lines.map((t, k) => ev("coach_text", { delta: t, index: k, role: k === 0 ? "opener" : "coach" })).join("")
-          + ev("done", { summary: { comparisonStatus: qa.comparisonStatus }, timings: { totalMs: 5 } });
+          + ev("done", { summary: { comparisonStatus: qa.comparisonStatus }, timings: { totalMs: 5 }, ...(wc ? { corrections: [{ kind: wcw.status, targetText: wcw.text, heard: wcw.heard, start: wcw.start, end: wcw.end, chunkIndex: 0, keyPointId: wcw.keyPointId, factRef: "reuse:0", source: "server_fact" }] } : {}) });
       }
       seen.set(attemptId, body);
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });

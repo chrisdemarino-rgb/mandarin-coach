@@ -6,7 +6,7 @@ import { highlightPieceHtml } from "../highlight.js";
 /** Returns {html|text, cls} for the cue area. */
 export function renderCue(els, S, { peek }) {
   const piece = S.piece, chunk = S.chunk;
-  const fading = S.practiceMode === "fading_cues";
+  const fading = S.cueFlow;
   const lvl = fading ? S.fade : 0;
   els.fadeIndicator.hidden = !fading;
   els.btnPeek.hidden = !(fading && lvl >= 1 && S.sessionActive);

@@ -10,7 +10,7 @@ import http from "node:http";
 
 const LISTEN = Number(process.argv[2] || 8095), TARGET = Number(process.argv[3] || 8093);
 const NEEDED = 3;
-const mode = { attempt: "issues", drill: "correct", unsupported: false };
+const mode = { attempt: "issues", drill: "correct", unsupported: false, retell: "" };   // retell: "" | "tone_flagged" | "tone_unflagged" | "legacy" (only touches basis:"transcript" assessments)
 let words = [];  // {id,text,pinyin,meaning,missCount,correctStreak,needed,lastMissedAt,sourceChunk,status}
 let seq = 0, attemptNo = 0, drillNo = 0;
 const seen = new Map();   // attemptId -> response body (replay)
@@ -56,6 +56,16 @@ function transformAttempt(body, chunkText, attemptId) {
     const nm = (b.match(/^event: (.+)$/m) || [])[1];
     if (nm !== "assessment") return b;
     const dm = b.match(/^data: (.*)$/m); const d = strip(JSON.parse(dm[1]));
+    if (d.basis === "transcript" && mode.retell) {
+      const han = [...(d.referenceText || d.transcript || "")].filter((c) => HAN.test(c));
+      if (mode.retell.startsWith("tone_") && han.length) {
+        d.facts = { ...(d.facts || {}), confirmedToneErrors: [{ index: 0, char: han[0], pinyin: pinyinOf(han[0]), expectedTone: 3, heardTone: 4, ref: "t0" }] };
+        if (Array.isArray(d.syllables) && d.syllables[0]) d.syllables[0].tone = { ...(d.syllables[0].tone || {}), decision: "review", expected: 3, heard: 4 };
+        if (mode.retell === "tone_unflagged") delete d.lowConfidence;
+      }
+      if (mode.retell === "legacy") delete d.retell;   // pre-`retell`-block backend: the UI must fall back to omission corrections
+      return `event: assessment\ndata: ${JSON.stringify(d)}`;
+    }
     if (m === "gate") { d.matchesText = false; d.gate = "low_match"; d.gateMessage = "That recording doesn't seem to match the sentence (or I couldn't hear speech). Please say the sentence again."; return `event: assessment\ndata: ${JSON.stringify(d)}`; }
     if (m === "issues") {
       d.wordStatus = ws.map((w, k) => {
@@ -81,7 +91,7 @@ const server = http.createServer(async (req, res) => {
     if (p === "/__fixture/mode" && req.method === "POST") {
       const b = JSON.parse((await readBody(req)).toString() || "{}");
       if (b.reset) { words = []; seq = 0; attemptNo = 0; drillNo = 0; seen.clear(); }
-      for (const k of ["attempt", "drill", "unsupported"]) if (b[k] !== undefined) mode[k] = b[k];
+      for (const k of ["attempt", "drill", "unsupported", "retell"]) if (b[k] !== undefined) mode[k] = b[k];
       if (Array.isArray(b.seed)) for (const t of b.seed) { const w = addMissed(t, `例句：${t}很重要。`); w.missCount = 2; }
       return json(res, 200, { mode, words: words.length });
     }

@@ -137,7 +137,7 @@ def run(viewport, tag, browser):
     # interrupted (phone lock / call)
     wait_state(p, "listening", 15000)
     p.evaluate("__coach.S.interrupt()")
-    check(wait_state(p, "paused", 3000) and "interrupted" in p.inner_text("#errorText"), "interruption pauses with a clear message")
+    check(wait_state(p, "paused", 3000) and "interrupted" in (p.inner_text("#errorText") + " " + p.inner_text("#pausedHint")), "interruption pauses with a clear message (auto-resume hint since 97d9056)")
     shot(p, f"{tag}-09-interrupted")
     p.click("#btnPause")
     wait_in(p, ["prompting", "listening"], 8000)

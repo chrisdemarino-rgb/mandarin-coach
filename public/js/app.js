@@ -166,7 +166,16 @@ btn.finish.addEventListener("click", () => S.finish());
 $("#btnPlayback").addEventListener("click", () => S.playTake());
 $("#btnHearCoach").addEventListener("click", () => S.replayCoach());
 $("#btnHear").addEventListener("click", () => S.hearModel());
-$("#btnPeek").addEventListener("click", () => { peek = !peek; render(); });
+// Retell: the text is hidden by default; Peek is counted (S.notePeek) and noted in the result. The flag resets for each new attempt.
+const peekOn = () => peek && (!S.retell || S.peeked);
+$("#btnPeek").addEventListener("click", () => {
+  const on = !peekOn();
+  peek = on;
+  if (on && S.retell && ["prompting", "listening", "processing", "paused"].includes(S.state)) S.notePeek();
+  render();
+});
+$("#btnRetellGot").addEventListener("click", () => S.ackRetellIntro());
+$("#btnRetellInfo").addEventListener("click", () => S.openRetellIntro(!(S.retellIntroOpen || (!S.retellIntroSeen && S.state === "idle"))));
 $("#btnErrRetry").addEventListener("click", () => S.errorAction());
 $("#btnErrSkip").addEventListener("click", () => { S.error = null; S.skip(); });
 
@@ -194,6 +203,7 @@ function primaryLabel() {
   return "";
 }
 const STAGE_TEXT = { uploading: "Uploading your recording…", transcribing: "Listening to what you said…", assessing: "Assessing your speech…", coaching: "Assessing your speech…" };
+const RETELL_STAGE_TEXT = { ...STAGE_TEXT, transcribing: "Writing down what you said…", assessing: "Checking your speech…", coaching: "Checking the meaning against the original…" };
 
 function render() {
   const st = S.state, total = S.chunks.length;
@@ -213,9 +223,16 @@ function render() {
   $("#emptyScript").hidden = total > 0;
   $("#cueCard").hidden = !total || st === "finished";
   if (S.pieceKey !== last.piece) { peek = false; last.piece = S.pieceKey; }
-  renderCue({ cueText: $("#cueText"), fadeIndicator: $("#fadeIndicator"), fadeText: $("#fadeText"), btnPeek: $("#btnPeek"), btnHear: $("#btnHear"), cueNote: $("#cueNote"), pieceLabel: $("#pieceLabel") }, S, { peek });
+  const introVisible = S.retell && (S.retellIntroOpen || (!S.retellIntroSeen && st === "idle"));
+  $("#retellIntro").hidden = !introVisible;
+  $("#btnRetellInfo").hidden = !S.retell || !S.hasScript;
+  $("#btnRetellInfo").setAttribute("aria-expanded", String(introVisible));
+  $("#assessHint").hidden = store.settings.assessMode !== "retell";
+  renderCue({ cueText: $("#cueText"), fadeIndicator: $("#fadeIndicator"), fadeText: $("#fadeText"), btnPeek: $("#btnPeek"), btnHear: $("#btnHear"), cueNote: $("#cueNote"), pieceLabel: $("#pieceLabel") }, S, { peek: peekOn() });
   const notice = $("#notice"); notice.hidden = !S.notice; notice.textContent = S.notice;
-  $("#idleHint").textContent = S.practiceMode === "fading_cues"
+  $("#idleHint").textContent = S.retell
+    ? "Tap Start. You'll hear the passage once, then tell it back in your own words. The text stays hidden."
+    : S.cueFlow
     ? "Tap Start. You'll hear the line once, then say it again with less and less help."
     : "Tap Start. You'll hear the line, then it's your turn to repeat.";
 
@@ -225,7 +242,7 @@ function render() {
   sp.hidden = !kind || (st === "idle" && !total);
   sp.dataset.kind = kind;
   $$("#statusPanel .st").forEach((el) => (el.hidden = !el.classList.contains("st-" + kind)));
-  $("#procTitle").textContent = STAGE_TEXT[S.statusStage] || "Assessing your speech…";
+  $("#procTitle").textContent = (S.retell ? RETELL_STAGE_TEXT : STAGE_TEXT)[S.statusStage] || "Assessing your speech…";
   $("#procHint").textContent = S.error ? "" : "This takes a few seconds.";
   $("#pausedHint").textContent = S.pauseReason && S.pauseReason !== "auth" && !S.pauseReason.startsWith("Paused:") ? S.pauseReason : S.pauseReason === "auth" ? "Signed out. Sign in again, then tap Resume." : "Tap Resume when you're ready. The microphone is released while paused.";
   const pp = S.playPos, frac = pp.d ? Math.min(1, pp.t / pp.d) : 0;
@@ -238,14 +255,14 @@ function render() {
   $("#errorPanel").hidden = !showErr;
   if (showErr) {
     $("#errorText").textContent = err ? err.message : S.pauseReason;
-    $("#btnErrRetry").hidden = !err;
+    $("#btnErrRetry").hidden = !err || (S.retell && err.kind === "assess" && err.retryable === false);
     $("#btnErrRetry").textContent = !err ? "" : err.action === "reupload" ? "Try again (re-send)" : err.action === "resume" ? "Retry microphone" : err.action === "rerun" ? "Try again" : "Record again";
     $("#btnErrSkip").hidden = !err || err.canSkip === false;
   }
 
   // result
   if ((st === "result" || st === "playback") && S.assessment && S.assessment.ok) {
-    const o = { showPinyin: store.settings.showPinyin, showFeedback: store.settings.showFeedback, cueShowsText: S.practiceMode !== "fading_cues" || peek };
+    const o = { showPinyin: store.settings.showPinyin, showFeedback: store.settings.showFeedback, cueShowsText: !S.cueFlow || peekOn() };
     if (resultView.shown !== S.assessment) { resultView.show(S, o); resultView.shown = S.assessment; } else { resultView.el.hidden = false; resultView.update(S, o); }
   } else { resultView.hide(); resultView.shown = null; }
   $("#btnPlayback").disabled = st !== "result" || !S.recording;
@@ -260,7 +277,8 @@ function render() {
   // controls
   const p = btn.primary;
   p.textContent = primaryLabel();
-  p.disabled = st === "processing" || ((st === "idle" || st === "finished") && !total);
+  const ra = st === "result" ? S.resultAction() : null;
+  p.disabled = st === "processing" || !!(ra && ra.disabled) || ((st === "idle" || st === "finished") && !total);
   p.classList.toggle("recording", st === "listening");
   btn.pause.textContent = st === "paused" ? "Resume" : "Pause";
   btn.pause.disabled = !(S.machine.can("PAUSE") || st === "paused");
@@ -298,8 +316,9 @@ function renderSummary(el) {
     <h2>Session summary</h2>
     <div class="stats">
       <div class="stat"><b>${m.attempts}</b>assessed attempts</div>
-      <div class="stat"><b>${m.passed}</b>without tone flags</div>
-      <div class="stat"><b>${m.toneFlags}</b>tones flagged to review</div>
+      ${S.retell ? `<div class="stat"><b>${m.passed}</b>retellings with no missing ideas flagged</div>
+      <div class="stat"><b>${m.peeks}</b>peeks at the text</div>` : `<div class="stat"><b>${m.passed}</b>without tone flags</div>
+      <div class="stat"><b>${m.toneFlags}</b>tones flagged to review</div>`}
       <div class="stat"><b>${m.doneChunks.size}/${S.chunks.length}</b>chunks completed</div>
       <div class="stat"><b>${m.skipped}</b>skipped</div>
       <div class="stat"><b>${mins} min</b>practice time</div>

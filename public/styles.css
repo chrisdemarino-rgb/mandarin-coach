@@ -338,3 +338,60 @@ body[data-view="drill"] #view-practice { display: none; }
   #view-drill { grid-column: 2; grid-row: 1; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--bg); }
   .drill-word { font-size: 72px !important; }
 }
+
+/* ---- Natural retelling (assessMode "retell") ---- */
+.retell-intro { border-left: 6px solid var(--accent); }
+.retell-intro p { margin: 6px 0; }
+.retell-intro .retell-sub { font-weight: 700; margin-top: 10px; }
+.retell-points { margin: 4px 0 8px; padding-left: 20px; }
+.retell-points li { margin: 4px 0; }
+.retell-intro .btn { margin-top: 8px; }
+#btnRetellInfo[aria-expanded="true"] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+#resultPanel.is-retell { display: flex; flex-direction: column; }
+#resultPanel.is-retell > * { order: 20; }
+#resultPanel.is-retell > .score-row { order: 0; }
+#resultPanel.is-retell > #transcriptBox { order: 1; }
+#resultPanel.is-retell > #retellWrap { order: 2; }
+#resultPanel.is-retell > .legend { order: 3; }
+#resultPanel.is-retell > #resultChars { order: 4; }
+#resultPanel.is-retell > #saveBar { order: 5; }
+#resultPanel.is-retell > #feedbackWrap { order: 6; }
+#resultPanel.is-retell > #flagWrap { order: 7; }
+#resultPanel.is-retell > .row { order: 8; }
+#resultPanel.is-retell > #engineTag { order: 9; }
+.retell-wrap { margin: 6px 0 10px; }
+.idea-list { list-style: none; margin: 4px 0; padding: 0; display: grid; gap: 8px; }
+.idea { border: 2px solid var(--line); background: var(--card); border-radius: 10px; padding: 8px 10px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.idea .w { font-size: 22px; }
+.idea .why { font-size: 14px; color: var(--muted); }
+.idea .cx, .wording .cx { flex-basis: 100%; font-size: 16px; }
+.idea .btn.small { margin-left: auto; }
+.wording { border: 2px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+.wording .w { font-size: 20px; margin-left: 8px; }
+.wording .mt { font-size: 16px; }
+.idea-note { margin: 6px 0; }
+.idea-ok, .idea-none { display: flex; gap: 8px; align-items: center; font-weight: 600; margin: 4px 0; }
+.tone-note { margin: 10px 0; padding: 8px 10px; border: 2px dashed var(--muted); border-radius: 10px; font-size: 15px; }
+.rch.miss { background: var(--ok-bg); border: 2px dotted var(--ok); }
+.rch.miss > span { text-decoration: underline dotted var(--ok); text-decoration-thickness: 4px; text-underline-offset: 4px; }
+.rch.miss .hl-m { position: absolute; top: -6px; right: -4px; font-size: 13px; line-height: 1; padding: 2px 5px; background: var(--ok); color: var(--card); }
+.idea.is-covered { border: 2px solid var(--good); background: var(--good-bg); }
+.idea .ib { width: 24px; height: 24px; flex: none; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font: 800 15px/1 system-ui, sans-serif; background: var(--muted); color: var(--card); align-self: center; }
+.idea.is-covered .ib { background: var(--good); }
+.idea.is-missing { border: 2px dotted var(--ok); background: var(--ok-bg); }
+.idea.is-missing .ib { background: var(--ok); }
+.idea.is-partial { border: 2px dashed var(--muted); background: var(--bg); }
+.idea.is-wrong { border: 2px solid var(--bad); background: var(--bad-bg); }
+.idea.is-wrong .ib { background: var(--bad); }
+.idea .ev, .idea .mt { color: var(--muted); font-size: 15px; flex-basis: 100%; }
+.sw { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; border: 2px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+.sw .w { font-size: 22px; }
+.sw .btn.small { margin-left: auto; }
+.hl-partial { text-decoration: underline wavy var(--muted); text-decoration-thickness: 2px; text-underline-offset: 4px; }
+.hl-m-partial { background: var(--muted); color: var(--card); }
+.rch.part { border: 2px dashed var(--muted); background: var(--bg); }
+.rch.part > span { text-decoration: underline wavy var(--muted); text-decoration-thickness: 2px; text-underline-offset: 4px; }
+.rch.diff { border: 2px solid var(--bad); background: var(--bad-bg); }
+.rch.diff > span { text-decoration: underline double var(--bad); text-underline-offset: 4px; }
+.rch.part .hl-m, .rch.diff .hl-m { position: absolute; top: -6px; right: -4px; font-size: 13px; line-height: 1; padding: 2px 5px; color: var(--card); }
+.rch.diff .hl-m { background: var(--bad); }

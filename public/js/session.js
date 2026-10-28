@@ -4,6 +4,7 @@ import { buildChunks, chunkIndexForSentence, parseScript, splitAtPauses, countSc
 import { createMachine, createStore, hashString } from "./state.js";
 import * as api from "./api.js";
 import { normalizeAssessment, isPass, wordOutcome, applyWordStatus, normalizeSavedMissed } from "./assess.js";
+import { retellOutcome, retellPassed } from "./retell.js";
 import * as apiWords from "./api-words.js";
 import { audio, getAudioEl, ensureInit, startAudioFromTap, micError, MicError, RECORDING_PROBLEMS } from "./audio-io.js";
 
@@ -31,6 +32,9 @@ export function createSession() {
     attemptInfo: null,        // {replayed, summary}
     coachLines: [], coachAudio: [], coachPlaying: false, coachDone: false,
     corrections: [],
+    streamEnded: false, coachSkipped: false, summary: null,   // retell: has the SSE stream ended / was the coach (meaning check) skipped / done.summary
+    peeked: false, peekCount: 0,                              // retell: reference text peeked at during this attempt / times this session
+    retellIntroSeen: (() => { try { return sessionStorage.getItem("mc_retell_intro") === "1"; } catch { return false; } })(), retellIntroOpen: false,
     statusStage: "",          // uploading | assessing | transcribing | coaching | speaking
     error: null,              // {message, code, retryable, canSkip, kind:'mic'|'upload'|'assess'|'audio'|'tts', network}
     notice: "",               // soft, non-blocking note (e.g. coach audio skipped)
@@ -40,7 +44,7 @@ export function createSession() {
     recStart: 0,
     playPos: { t: 0, d: 0, what: "" },
     micArmed: false, ttsOff: false,
-    stats: { attempts: 0, passed: 0, toneFlags: 0, skipped: 0, startedAt: 0, doneChunks: new Set(), weak: new Map() },
+    stats: { peeks: 0, attempts: 0, passed: 0, toneFlags: 0, skipped: 0, startedAt: 0, doneChunks: new Set(), weak: new Map() },
     saveMsg: "",
     words: [], wordsLoaded: false,
     savedMissedExtra: [],     // savedMissed from the `done` event (assessment carries its own)
@@ -52,6 +56,9 @@ export function createSession() {
     get state() { return machine.state; },
     get settings() { return store.settings; },
     get practiceMode() { return store.settings.practiceMode; },
+    get retell() { return store.settings.assessMode === "retell"; },
+    /** Fading-cue flow (key-word prompts from /api/cues, text hidden): chosen as the practice mode, and always used for retelling. */
+    get cueFlow() { return store.settings.practiceMode === "fading_cues" || store.settings.assessMode === "retell"; },
     get chunk() { return S.chunks[S.chunkIdx] || null; },
     get piece() { const c = S.chunk; return c ? c.pieces[S.pieceIdx] || null : null; },
     get pieceKey() { return `${S.chunkIdx}:${S.pieceIdx}:${S.chunk ? S.chunk.id : ""}`; },
@@ -130,7 +137,21 @@ export function createSession() {
     S.emit();
   };
 
-  S.setAssessMode = (mode) => { store.setSettings({ assessMode: mode }, true); S.pushPrefs({ assessMode: mode }); S.emit(); };
+  S.setAssessMode = (mode) => {
+    if (store.settings.assessMode === mode) return;
+    store.setSettings({ assessMode: mode }, true); S.pushPrefs({ assessMode: mode });
+    S.fade = 1; S.cue = null; S.heardKey = "";
+    if (S.sessionActive && machine.state !== "paused") { abortFlow(); stopAudio(); cancelTake(); resetAttemptState(); machine.send("RETRY") || machine.send("NEXT"); enterPrompting(); }
+    S.emit();
+  };
+  /** Retell intro card ("Say it in your own words"): shown once per session until "Got it"; re-openable with the info button. */
+  S.ackRetellIntro = () => { S.retellIntroSeen = true; S.retellIntroOpen = false; try { sessionStorage.setItem("mc_retell_intro", "1"); } catch { /* private mode */ } S.emit(); };
+  S.openRetellIntro = (open = true) => { S.retellIntroOpen = open; S.emit(); };
+  /** Retell: the learner looked at the reference text. Counted per attempt (flag) and per session (stats); shown in the result. */
+  S.notePeek = () => { if (!S.peeked) { S.peeked = true; S.peekCount++; S.stats.peeks++; } };
+  S.outcome = () => (S.retell ? retellOutcome({ assessment: S.assessment, corrections: S.corrections, keyIdeas: S.assessment && S.assessment.keyIdeas, streamEnded: S.streamEnded, coachSkipped: S.coachSkipped, summary: S.summary }) : null);
+  /** Did this attempt pass? Retell: only when the coach compared the meaning and flagged no missing idea (tone is never part of it). */
+  S.passed = () => (S.retell ? retellPassed(S.outcome()) : S.assessment ? isPass(S.assessment) : false);
   S.setVoice = (voice) => { store.setSettings({ voice }, true); S.pushPrefs({ voice: voice || undefined }); S.emit(); };
   S.setSpeed = (speed) => { store.setSettings({ speed }, true); S.pushPrefs({ speed }); S.emit(); };
   S.setLocal = (patch) => { store.setSettings(patch); S.emit(); };
@@ -149,6 +170,7 @@ export function createSession() {
   /* ------------------------------------------------------------------ helpers */
   function resetAttemptState() {
     S.assessment = null; S.attemptInfo = null; S.coachLines = []; S.coachAudio = []; S.corrections = [];
+    S.streamEnded = false; S.coachSkipped = false; S.summary = null; S.peeked = false;
     S.coachDone = false; S.coachPlaying = false; S.statusStage = ""; S.error = null; S.notice = ""; S.pauseReason = "";
     S.savedMissedExtra = []; pendingWordStatus = null;
     if (S.recording && S.recording.url) URL.revokeObjectURL(S.recording.url);
@@ -178,7 +200,7 @@ export function createSession() {
   async function loadCue(run, signal) {
     S.cue = null; S.cueError = "";
     const p = S.piece;
-    if (S.practiceMode !== "fading_cues" || !p) return;
+    if (!S.cueFlow || !p) return;
     if (S.fade === 4) { S.cue = { level: 4, cue: "", items: [] }; return; }
     S.cueLoading = true; S.emit();
     try {
@@ -196,7 +218,7 @@ export function createSession() {
     // While the user is speaking, warm caches for what comes next (best effort, never throws).
     const nxt = peekNext();
     if (!nxt) return;
-    if (S.practiceMode === "fading_cues") api.prefetchCues(nxt.spoken, [1]);
+    if (S.cueFlow) api.prefetchCues(nxt.spoken, [1]);
     else if (!S.ttsOff) for (const seg of splitAtPauses(nxt)) if (seg.text && /[\u3400-\u9fff]/.test(seg.text)) api.tts(seg.text, { voice: store.settings.voice, speed: store.settings.speed }).catch(() => {});
   }
   function peekNext() {
@@ -232,7 +254,7 @@ export function createSession() {
   /* ------------------------------------------------------------------ flow */
   async function enterPrompting({ forceModel = null } = {}) {
     const { run, signal } = newFlow();
-    S.error = null; S.assessment = null; S.attemptInfo = null; S.coachLines = []; S.coachAudio = []; S.corrections = []; S.coachDone = false; S.statusStage = ""; S.savedMissedExtra = []; pendingWordStatus = null;
+    S.error = null; S.assessment = null; S.attemptInfo = null; S.coachLines = []; S.coachAudio = []; S.corrections = []; S.coachDone = false; S.streamEnded = false; S.coachSkipped = false; S.summary = null; S.peeked = false; S.statusStage = ""; S.savedMissedExtra = []; pendingWordStatus = null;
     if (!S.hasScript || !S.piece) { finishSession(); return; }
     const piece = S.piece;
     currentAttemptId = null;
@@ -245,7 +267,7 @@ export function createSession() {
       await loadCue(run, signal);
       if (!alive(run)) return;
       S.emit();
-      const fading = S.practiceMode === "fading_cues";
+      const fading = S.cueFlow;
       const wantModel = forceModel !== null ? forceModel : !fading || (S.fade === 1 && S.heardKey !== S.pieceKey);
       if (wantModel) {
         await playModel(piece, run, { signal });
@@ -283,9 +305,11 @@ export function createSession() {
   /** User tapped Start (inside the tap handler: unlock + arm mic must happen synchronously with the gesture). */
   S.start = async ({ fromSentence = null } = {}) => {
     if (!S.hasScript) return;
-    S.stats = { attempts: 0, passed: 0, toneFlags: 0, skipped: 0, startedAt: Date.now(), doneChunks: new Set(), weak: new Map() };
+    S.stats = { peeks: 0, attempts: 0, passed: 0, toneFlags: 0, skipped: 0, startedAt: Date.now(), doneChunks: new Set(), weak: new Map() };
     if (fromSentence !== null) { S.rebuild(fromSentence); } else if (machine.state === "finished") { S.rebuild(0); }
-    S.pieceIdx = 0; S.fade = 1; S.heardKey = ""; S.ttsOff = false;
+    S.pieceIdx = 0; S.fade = 1; S.heardKey = ""; S.ttsOff = false; S.peekCount = 0;
+    if (S.retell && !S.retellIntroSeen) { S.retellIntroSeen = true; try { sessionStorage.setItem("mc_retell_intro", "1"); } catch { /* ignore */ } }   // starting counts as having seen it
+    S.retellIntroOpen = false;
     resetAttemptState();
     machine.send("RESET"); machine.send("START");
     S.emit();
@@ -359,7 +383,7 @@ export function createSession() {
     abortFlow(); stopAudio(); cancelTake();
     machine.send("RETRY");
     // Fading: keep the level; retrying doesn't count as a new heard-model reveal
-    enterPrompting({ forceModel: S.practiceMode === "fading_cues" ? false : null });
+    enterPrompting({ forceModel: S.cueFlow ? false : null });
     S.emit();
   };
 
@@ -393,8 +417,14 @@ export function createSession() {
   /** What the main button does in the result state. Fading: pass -> one level less cue on the SAME piece (level 4 pass -> next piece);
    *  no pass -> one level more cue. Listen-and-repeat: pass -> next piece, no pass -> try again. */
   S.resultAction = () => {
-    const passed = S.assessment ? isPass(S.assessment) : false;
-    const fading = S.practiceMode === "fading_cues";
+    const passed = S.passed();
+    const fading = S.cueFlow;
+    if (S.retell) {
+      const o = S.outcome();
+      if (o.state === "pending") return { kind: "wait", label: "Checking the meaning…", disabled: true };
+      if (o.state === "missing") return { kind: "easier", label: S.fade > 1 ? `Try again with more cue (level ${S.fade - 1})` : "Try again, with the missing idea" };
+      if (!retellPassed(o)) return { kind: "retry", label: "Try again" };   // partly covered / not checked: same cue level
+    }
     if (fading) {
       if (passed) return S.fade < 4 ? { kind: "harder", label: `Less cue (level ${S.fade + 1} of 4)` } : { kind: "next", label: S.isLast() ? "Finish" : "Next piece" };
       return { kind: "easier", label: S.fade > 1 ? `Try again with more cue (level ${S.fade - 1})` : "Try again" };
@@ -404,6 +434,7 @@ export function createSession() {
   S.doResultAction = () => {
     if (machine.state !== "result" && machine.state !== "playback") return;
     const act = S.resultAction();
+    if (act.disabled) return;
     abortFlow(); stopAudio();
     if (act.kind === "harder") { S.fade++; machine.send("RETRY"); enterPrompting({ forceModel: false }); }
     else if (act.kind === "easier") { S.fade = Math.max(1, S.fade - 1); machine.send("RETRY"); enterPrompting({ forceModel: false }); }
@@ -464,12 +495,14 @@ export function createSession() {
           else if (name === "coach_audio") { S.coachAudio[data.index] = { url: data.url, text: data.text }; queueCoachAudio(run, data.url); }
           else if (name === "done") { S.corrections = data.corrections || []; if (data.savedMissed) S.savedMissedExtra = normalizeSavedMissed(data.savedMissed); if (data.wordStatus && S.assessment && !S.assessment.wordStatus.length) applyWordStatus(S.assessment, data.wordStatus); S.attemptInfo = { ...(S.attemptInfo || {}), summary: data.summary || null }; S.coachDone = true; S.statusStage = ""; }
           else if (name === "error") { terminalError = data; }
+          if (name === "status" && data && data.skipped && data.stage === "coaching") S.coachSkipped = true;
+          if (name === "done") { S.summary = data && data.summary && typeof data.summary === "object" ? data.summary : null; S.streamEnded = true; if (S.summary && S.summary.coached === false) S.coachSkipped = true; }
           S.emit();
         },
       });
     } catch (e) {
       if (!alive(run) || (e && e.name === "AbortError")) return;
-      if (gotAssessment) { S.coachDone = true; S.statusStage = ""; S.notice = "Connection dropped before the coach finished; the assessment above is complete."; S.emit(); return; }
+      if (gotAssessment) { S.coachDone = true; S.streamEnded = true; S.coachSkipped = true; S.statusStage = ""; S.notice = "Connection dropped before the coach finished; the assessment above is complete."; S.emit(); return; }
       onUploadFailure(e); return;
     }
     if (!alive(run)) return;
@@ -477,6 +510,8 @@ export function createSession() {
     if (!gotAssessment) { onUploadFailure(new api.ApiError("The server ended the response without a result.", { network: true })); return; }
     try { audio.markDone(); } catch { /* ignore */ }
     S.statusStage = "";
+    if (!S.streamEnded) { S.streamEnded = true; S.coachSkipped = true; }   // stream closed without `done`: the meaning check can't be claimed
+    if (S.retell && S.assessment && S.assessment.ok && retellPassed(S.outcome())) S.stats.passed++;
     S.emit();
     S.loadMissed();   // the backend auto-feeds "Words to practise" from missed words: refresh after every attempt
   }
@@ -490,13 +525,23 @@ export function createSession() {
     if (e.status === 409) S.error.message = "That take is already being processed. Wait a moment, then tap Try again.";
     S.emit();
   }
+  /** Retell/STT error codes get a plain explanation. Always starts with "No assessment obtained" so nothing looks like a result. */
+  const ERROR_HINTS = {
+    no_speech_detected: "I didn't hear any speech in that take. Say the passage in your own words, close to the microphone.",
+    retell_too_long: "That passage is too long to retell in one go. Use a shorter chunk (Settings > Chunking) and try again.",
+    stt_not_configured: "Speech-to-text isn't set up on the server yet, so free retelling can't be checked.",
+  };
+  function errorText(d) {
+    const base = ERROR_HINTS[d.code] || d.message || "";
+    return /^no assessment obtained/i.test(base) ? base : `No assessment obtained${base ? `: ${base}` : "."}`;
+  }
   function onAttemptError(d) {
     try { audio.markDone(); } catch { /* ignore */ }
     S.statusStage = "";
     S.assessment = null;
     const reupload = !d.code || /^(engine_unavailable|rate_limit|upstream|timeout|internal|engine_error|service_unavailable)/.test(d.code);
     S.error = {
-      kind: "assess", action: reupload && S.recording ? "reupload" : "rerecord", code: d.code || "", message: d.message || "No assessment obtained.", retryable: d.retryable !== false, canSkip: d.canSkip !== false,
+      kind: "assess", action: reupload && S.recording ? "reupload" : "rerecord", code: d.code || "", message: errorText(d), retryable: d.retryable !== false, canSkip: d.canSkip !== false,
       canReupload: d.retryable !== false && /engine_unavailable|rate_limit|not_configured|unavailable|timeout|upstream/.test(d.code || "") && !!S.recording,
       engine: d.engine || "", mock: d.mock === true, stage: d.stage || "",
     };
@@ -519,13 +564,15 @@ export function createSession() {
       return;
     }
     S.stats.attempts++;
-    if (isPass(a)) S.stats.passed++;
-    S.stats.toneFlags += a.confirmed.length;
-    const key = piece.spoken;
-    if (a.confirmed.length) S.stats.weak.set(key, a.confirmed.length); else S.stats.weak.delete(key);
+    if (!a.retell) {   // retell: tone flags are a rough, transcript-based guide only and the pass is decided when the coach finishes
+      if (isPass(a)) S.stats.passed++;
+      S.stats.toneFlags += a.confirmed.length;
+      const key = piece.spoken;
+      if (a.confirmed.length) S.stats.weak.set(key, a.confirmed.length); else S.stats.weak.delete(key);
+    }
     machine.send("RESULT");
     S.statusStage = a.mock ? "" : S.statusStage;
-    recordWordHistory(a, piece);
+    if (!a.retell) recordWordHistory(a, piece);   // word history needs word facts about the REFERENCE; retell has none
     S.emit();
   }
 
@@ -583,7 +630,7 @@ export function createSession() {
 
   /** Fading: user wants an easier / harder cue right now. */
   S.setFade = (level) => {
-    if (S.practiceMode !== "fading_cues" || !machine.can("RETRY")) return;
+    if (!S.cueFlow || !machine.can("RETRY")) return;
     S.fade = Math.max(1, Math.min(4, level));
     S.retry();
   };

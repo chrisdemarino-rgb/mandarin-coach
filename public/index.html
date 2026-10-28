@@ -100,6 +100,19 @@
           <button id="btnToScript" class="btn primary" type="button">Open script</button>
         </div>
 
+        <div id="retellIntro" class="card retell-intro" role="region" aria-labelledby="retellIntroTitle" hidden>
+          <h2 id="retellIntroTitle" class="h2">Say it in your own words</h2>
+          <p>Listen to the passage, then tell it back the way you would say it. <strong>Exact wording isn't required.</strong></p>
+          <p class="retell-sub">What I'll check</p>
+          <ul class="retell-points">
+            <li><strong>Meaning:</strong> I compare what you said with the original and name any key ideas you left out.</li>
+            <li><strong>Wording:</strong> I point out anything that sounds wrong or unnatural in Chinese.</li>
+            <li><strong>Tone:</strong> free speech isn't scored for tone. If I show anything, it's a rough guide and says so.</li>
+          </ul>
+          <p class="muted">The text stays hidden while you speak. Tap Peek if you get stuck (I'll note that you did). Short chunks work best.</p>
+          <button id="btnRetellGot" class="btn primary" type="button">Got it</button>
+        </div>
+
         <div id="cueCard" class="card cue-card">
           <div class="cue-meta">
             <div id="fadeIndicator" class="fade-ind" hidden aria-label="Cue level">
@@ -108,6 +121,7 @@
             </div>
             <div class="row gap">
               <span id="pieceLabel" class="muted"></span>
+              <button id="btnRetellInfo" class="chip" type="button" hidden aria-controls="retellIntro" aria-expanded="false" aria-label="How retelling works">&#9432; How it works</button>
               <button id="btnPeek" class="chip" type="button" hidden aria-pressed="false">Peek</button>
               <button id="btnHear" class="chip" type="button" hidden>&#128266; Hear it</button>
             </div>
@@ -165,6 +179,14 @@
             <button id="btnClearSel" class="btn ghost small" type="button">Clear</button>
           </div>
           <div id="transcriptBox" class="transcript" hidden></div>
+          <div id="retellWrap" class="retell-wrap" hidden>
+            <h3 class="h3">Key ideas</h3>
+            <div id="ideaBody"></div>
+            <div id="suggestWrap" hidden><h3 class="h3">Words worth practising</h3><ul id="suggestList" class="idea-list"></ul></div>
+            <div id="wordingWrap" hidden><h3 class="h3">Wording notes</h3><ul id="wordingList" class="idea-list"></ul></div>
+            <div id="toneNote" class="tone-note" hidden></div>
+            <p id="peekNote" class="muted" hidden></p>
+          </div>
           <div id="feedbackWrap" hidden>
             <button id="btnFeedback" class="btn ghost fb-toggle" type="button" aria-expanded="true" aria-controls="feedbackBody">Written feedback</button>
             <div id="feedbackBody" class="fb-body" lang="zh-CN"></div>
@@ -297,6 +319,7 @@
           <option value="close">Close: repeat the line (assessed against the script)</option>
           <option value="retell">Retell: say it in your own words (assessed on what you said)</option>
         </select>
+        <p id="assessHint" class="muted" hidden>Retell: say a chunk in your own words. I check the meaning, so wording can differ. Needs speech-to-text and the coach on the server. Tone isn't scored.</p>
         <label class="label" for="setRate">Coach speech rate: <output id="setRateOut">1.00</output>×</label>
         <input id="setRate" class="range" type="range" min="0.6" max="1.2" step="0.05">
         <label class="label" for="setVoice">Coach voice (optional)</label>

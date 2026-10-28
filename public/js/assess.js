@@ -3,6 +3,7 @@
 // no score of 0 / invented scores (overall may be null); status !== "ok" means NO assessment.
 
 import { normalizeWordStatus, problemWords, problemSummary } from "./highlight.js";
+import { normalizeRetellBlock } from "./retell.js";
 
 const HAN = /[\u3400-\u9fff]/;
 
@@ -14,15 +15,20 @@ export function normalizeAssessment(data, fallbackText = "") {
   const d = data || {};
   const ok = d.status === "ok" || (d.status === undefined && Array.isArray(d.syllables) && d.syllables.length > 0);
   const syllables = ok && Array.isArray(d.syllables) ? [...d.syllables].sort((a, b) => (a.index ?? 0) - (b.index ?? 0)) : [];
-  const overall = ok && typeof d.overall === "number" && Number.isFinite(d.overall) && d.overall > 0 ? Math.round(d.overall) : null;
+  // Retelling (basis "transcript"): scripted-speech scores are not valid for free speech -> no overall; tone info only when the backend flags it
+  // as reduced-confidence (lowConfidence:true). Otherwise none at all.
+  const retell = d.basis === "transcript";
+  const toneSkipped = !!(d.retell && d.retell.tone && d.retell.tone.status && d.retell.tone.status !== "ok");   // backend says no tone check ran
+  const toneOk = !retell || (d.lowConfidence === true && !toneSkipped);
+  const overall = ok && !retell && typeof d.overall === "number" && Number.isFinite(d.overall) && d.overall > 0 ? Math.round(d.overall) : null;
 
   // facts: trust the server's, else derive from syllables
-  const confirmed = ok
+  const confirmed = ok && toneOk
     ? (d.facts && Array.isArray(d.facts.confirmedToneErrors)
       ? d.facts.confirmedToneErrors.map((f) => ({ index: f.index, char: f.char, pinyin: f.pinyin, expected: f.expectedTone, heard: f.heardTone }))
       : syllables.filter((s) => toneDec(s) === "review").map((s) => ({ index: s.index, char: s.char, pinyin: s.pinyin, expected: s.tone.expected, heard: s.tone.heard })))
     : [];
-  const uncertain = ok
+  const uncertain = ok && toneOk
     ? (d.facts && Array.isArray(d.facts.uncertain)
       ? d.facts.uncertain.map((f) => ({ index: f.index, char: f.char, dimension: f.dimension }))
       : syllables.flatMap((s) => anyUncertain(s).map((dim) => ({ index: s.index, char: s.char, dimension: dim }))))
@@ -52,12 +58,13 @@ export function normalizeAssessment(data, fallbackText = "") {
   // Policy gate (wrong sentence / no speech): no highlights, no verdict, "try again".
   const gated = ok && (d.gate === "low_match" || d.matchesText === false);
   const chunkText = fallbackText || referenceText;
-  const wordStatus = ok && !gated ? normalizeWordStatus(d.wordStatus, chunkText) : [];
+  const wordStatus = ok && !gated && !retell ? normalizeWordStatus(d.wordStatus, chunkText) : [];
   const facts = d.facts || {};
   return {
     gated, gateMessage: gated ? d.gateMessage || "That recording doesn't seem to match the sentence. Please say it again." : "",
     wordStatus, chunkText, insertedText: typeof facts.insertedText === "string" ? facts.insertedText : Array.isArray(facts.insertedText) ? facts.insertedText.join(" ") : "",
-    savedMissed: normalizeSavedMissed(d.savedMissed),
+    savedMissed: normalizeSavedMissed(d.savedMissed), retell, toneShown: toneOk, retellInfo: retell ? normalizeRetellBlock(d.retell, chunkText) : null,
+    keyIdeas: Array.isArray(d.keyIdeas) ? d.keyIdeas : Array.isArray(d.facts && d.facts.keyIdeas) ? d.facts.keyIdeas : [],
     canPraise: facts.canPraise !== false, completeness: typeof facts.completeness === "string" ? facts.completeness : "",   // canPraise:false => never "all correct"
     ok, status: ok ? "ok" : "unavailable", engine: d.engine || "", mock: d.mock === true, modelVersion: d.modelVersion || "",
     overall, chars, confirmed, uncertain, syllables, basis: d.basis || "script", referenceText,

@@ -16,14 +16,33 @@ function wav(ms = 450, hz = 440) {
 const AUDIO = wav();
 const port = Number(process.argv[2] || process.env.FAKE_OPENAI_PORT || 8094);
 
+// Runtime control (dev only): POST /__fake {"transcript":"...","ideas":"cpm","language":true,"llmFail":true|false}.
+//   ideas: one letter per key idea (a reference clause): c = covered (evidence quoted from the transcript), p = partial, m = missing, w = missing + wrong_meaning. Default "ccc".
+//   language: add a "language" correction quoting the transcript. Only used for the retell meaning comparison (system prompt "compare the MEANING").
+const ctl = { transcript: process.env.FAKE_TRANSCRIPT || "", ideas: process.env.FAKE_IDEAS || "", language: false, llmFail: false };
+const HZ = /[\u3400-\u9fff]/;
+function compareJson(sys, userJ) {
+  const ref = String(userJ.reference || ""), tr = String(userJ.transcript || "");
+  const clauses = ref.split(/[，。！？；、,.!?;\s]+/).filter((c) => [...c].filter((x) => HZ.test(x)).length >= 2).slice(0, 4);
+  const codes = (ctl.ideas || "c".repeat(clauses.length)).split("");
+  const ev = [...tr].filter((x) => HZ.test(x)).slice(0, 3).join("");
+  const ideas = clauses.map((q, k) => { const c = codes[k] || "c"; return { id: `i${k + 1}`, textZh: [...q].slice(0, 8).join(""), refQuote: q, covered: c === "c" ? true : c === "p" ? "partial" : false, evidence: c === "m" || c === "w" ? null : ev, confidence: "high" }; });
+  const corrections = [];
+  codes.forEach((c, k) => { if (c === "w" && ideas[k]) corrections.push({ kind: "wrong_meaning", ideaId: ideas[k].id, quote: ev, explanationZh: "这里的意思和原文不一样。", modelText: ideas[k].refQuote }); });
+  if (ctl.language && ev.length >= 2) corrections.push({ kind: "language", ideaId: null, quote: ev.slice(0, 2), explanationZh: "这个说法可以更自然一些。", modelText: clauses[0] || "" });
+  return { ideas, corrections, summaryZh: "你把大意讲出来了。" };
+}
 http.createServer(async (req, res) => {
   const chunks = []; for await (const c of req) chunks.push(c);
   const body = Buffer.concat(chunks);
+  if (req.url === "/__fake") { try { Object.assign(ctl, JSON.parse(body.toString() || "{}")); } catch { /* ignore */ } res.writeHead(200, { "Content-Type": "application/json" }); return res.end(JSON.stringify(ctl)); }
   if (req.url === "/v1/chat/completions") {
     const j = JSON.parse(body.toString());
+    if (ctl.llmFail) { res.writeHead(500, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ error: { message: "fake llm down" } })); }
     const sys = j.messages?.[0]?.content || "";
     let content;
     if (/ONE Chinese word/.test(sys)) content = JSON.stringify({ hint: "生活" });
+    else if (/compare the MEANING/.test(sys)) { let u = {}; try { u = JSON.parse(j.messages[1].content); } catch { /* ignore */ } content = JSON.stringify(compareJson(sys, u)); }
     else {
       let facts = { confirmedToneErrors: [], uncertain: [] };
       try { facts = JSON.parse(j.messages[1].content).facts || facts; } catch { /* ignore */ }
@@ -39,6 +58,6 @@ http.createServer(async (req, res) => {
     res.write("data: [DONE]\n\n"); return res.end();
   }
   if (req.url === "/v1/audio/speech") { res.writeHead(200, { "Content-Type": "audio/mpeg" }); return res.end(AUDIO); }
-  if (req.url === "/v1/audio/transcriptions") { res.writeHead(200, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ text: process.env.FAKE_TRANSCRIPT || "我们今天练习中文。" })); }
+  if (req.url === "/v1/audio/transcriptions") { res.writeHead(200, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ text: ctl.transcript || "我们今天练习中文。" })); }
   res.writeHead(404); res.end();
 }).listen(port, "127.0.0.1", () => console.log(`fake openai on ${port}`));

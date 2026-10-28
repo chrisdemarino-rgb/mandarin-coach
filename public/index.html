@@ -151,6 +151,13 @@
             </div>
           </div>
           <p class="legend muted">Tap characters to select, then save as a word. <span class="lg lg-bad">tone to review</span> <span class="lg lg-unsure">not sure</span></p>
+          <div id="resultScriptWrap" hidden><small class="muted">Your line, with flagged words marked</small><p id="resultScript" class="result-script" lang="zh-CN"></p></div>
+          <p id="legendWords" class="legend muted" hidden>
+            <span class="lg lg-w-missed"><span class="hl hl-missed">word</span><sup class="hl-m">&minus;</sup> missed</span>
+            <span class="lg lg-w-wrong"><span class="hl hl-wrong">word</span><sup class="hl-m">!</sup> wrong</span>
+            <span class="lg lg-w-sub"><span class="hl hl-substituted">word</span><sup class="hl-m">&harr;</sup> said something else</span>
+            <span class="lg lg-w-unsure"><span class="hl hl-uncertain">word</span><sup class="hl-m">?</sup> not sure</span>
+          </p>
           <div id="resultChars" class="rchars" lang="zh-CN"></div>
           <div id="saveBar" class="savebar" hidden>
             <span id="saveSel" class="sel-text" lang="zh-CN"></span>
@@ -161,6 +168,12 @@
           <div id="feedbackWrap" hidden>
             <button id="btnFeedback" class="btn ghost fb-toggle" type="button" aria-expanded="true" aria-controls="feedbackBody">Written feedback</button>
             <div id="feedbackBody" class="fb-body" lang="zh-CN"></div>
+          </div>
+          <div id="flagWrap" class="flagwrap" hidden>
+            <h3 class="h3">Words to work on</h3>
+            <ul id="flagList" class="flag-list" lang="zh-CN"></ul>
+            <p id="insertedNote" class="muted" hidden></p>
+            <p id="savedNote" class="saved-note" role="status" hidden></p>
           </div>
           <div class="row gap wrap">
             <button id="btnPlayback" class="btn" type="button">&#9654; Play my recording</button>
@@ -185,7 +198,11 @@
 
     <!-- ========== SAVED ========== -->
     <section id="view-saved" class="view" aria-label="Saved words">
-      <div class="card">
+      <div id="savedSeg" class="seg" role="group" aria-label="Word lists">
+        <button id="segSaved" class="seg-btn" type="button" aria-pressed="true">Saved words</button>
+        <button id="segPractise" class="seg-btn" type="button" aria-pressed="false">Words to practise <span id="practiseBadge" class="seg-count"></span></button>
+      </div>
+      <div class="card" id="panelSaved">
         <div class="row between wrap gap"><h2 class="h2">Saved words <span id="savedCount" class="muted"></span></h2></div>
         <div class="row gap wrap">
           <button id="btnCopyWords" class="btn" type="button">Copy list</button>
@@ -195,6 +212,79 @@
         <p id="savedError" class="warn" hidden></p>
         <ul id="savedList" class="saved-list"></ul>
         <p id="savedEmpty" class="muted" hidden>Nothing saved yet. In a result, tap characters and choose Save word.</p>
+      </div>
+
+      <div class="card" id="panelPractise" hidden>
+        <div class="row between wrap gap"><h2 class="h2">Words to practise <span id="practiseCount" class="muted"></span></h2></div>
+        <p class="muted">Words you miss or get wrong are added here automatically. Say a word right several times in a row and it leaves the list.</p>
+        <div class="row gap wrap">
+          <button id="btnDrillAll" class="btn primary" type="button">Drill all</button>
+          <button id="btnRefreshPractise" class="btn ghost" type="button">Refresh</button>
+        </div>
+        <p id="practiseError" class="warn" hidden></p>
+        <p id="practiseUndo" class="notice" role="status" hidden><span id="practiseUndoText"></span> <button id="btnUndoKnown" class="btn small" type="button">Undo</button></p>
+        <ul id="practiseList" class="saved-list"></ul>
+        <p id="practiseEmpty" class="muted" hidden>Nothing to practise right now. Words you miss during practice will show up here by themselves.</p>
+      </div>
+    </section>
+
+    <!-- ========== WORD DRILL ========== -->
+    <section id="view-drill" class="view" aria-label="Word drill">
+      <div class="practice-scroll" id="drillScroll">
+        <div class="progress-wrap">
+          <div class="row between"><span id="drillProgress" class="muted">Word drill</span><button id="btnDrillBack" class="chip" type="button">&larr; Words</button></div>
+        </div>
+        <div id="drillCard" class="card cue" hidden>
+          <p id="drillWord" class="cue-text drill-word" lang="zh-CN"></p>
+          <p id="drillPinyin" class="drill-py"></p>
+          <p id="drillMeaning" class="muted" hidden></p>
+          <p id="drillExample" class="drill-example" lang="zh-CN" hidden></p>
+          <div class="row gap wrap">
+            <button id="btnDrillHear" class="chip" type="button">&#128266; Hear the word</button>
+            <button id="btnDrillExample" class="chip" type="button" hidden>&#128266; Hear example</button>
+          </div>
+          <div id="drillStreak" class="streak" role="img" aria-label="Progress"><span class="streak-dots" aria-hidden="true"></span><span id="drillStreakText" class="muted"></span></div>
+          <p id="drillNotice" class="notice" role="status" hidden></p>
+        </div>
+
+        <div id="drillStatus" class="card status" data-kind="idle">
+          <div class="st st-prompting" hidden><span class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span class="st-title">Coach is speaking</span><span class="muted">Listen, then tap Record.</span></div>
+          <div class="st st-ready" hidden><span class="st-title">Your turn</span><span class="muted" id="drillReadyHint">Tap Record, say the word, then tap Done.</span></div>
+          <div class="st st-listening" hidden>
+            <div class="row gap center-v"><span class="rec-dot" aria-hidden="true"></span><span class="st-title rec">Recording</span><span id="drillTimer" class="timer" aria-hidden="true">0:00</span></div>
+            <span class="muted">Say the word now. Tap Done when finished.</span>
+          </div>
+          <div class="st st-processing" hidden><span class="spinner" aria-hidden="true"></span><span class="st-title" id="drillProcTitle">Checking your word…</span><span class="muted">This takes a few seconds.</span></div>
+        </div>
+
+        <div id="drillError" class="card error" role="alert" hidden>
+          <p id="drillErrorText"></p>
+          <div class="row gap wrap">
+            <button id="btnDrillErrRetry" class="btn primary" type="button">Try again</button>
+            <button id="btnDrillErrSkip" class="btn" type="button">Skip this word</button>
+          </div>
+        </div>
+
+        <div id="drillResult" class="card result" hidden>
+          <div class="score-row">
+            <div id="drillBadge" class="score-badge" aria-hidden="true"></div>
+            <div><div id="drillVerdict" class="score-label"></div><div id="drillVerdictNote" class="muted"></div></div>
+          </div>
+          <div id="drillCoach" class="coach-lines" lang="zh-CN"></div>
+          <div class="row gap wrap">
+            <button id="btnDrillHearCoach" class="btn" type="button">&#128266; Hear coach again</button>
+          </div>
+        </div>
+
+        <div id="drillSummary" class="card summary" hidden></div>
+      </div>
+      <div class="controlbar">
+        <button id="btnDrillPrimary" class="btn primary big" type="button">Record</button>
+        <div class="ctl-row three">
+          <button id="btnDrillRetry" class="btn" type="button">Retry</button>
+          <button id="btnDrillSkip" class="btn" type="button">Skip</button>
+          <button id="btnDrillFinish" class="btn danger" type="button">Finish</button>
+        </div>
       </div>
     </section>
 

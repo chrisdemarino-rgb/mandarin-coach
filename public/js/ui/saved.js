@@ -1,4 +1,5 @@
 import { esc, formatPinyin, toast, $ } from "./dom.js";
+import { streakLabel } from "../api-words.js";
 
 export const savedToText = (list) => list.map((w) => [w.text, formatPinyin(w.pinyin), w.meaning || ""].join("\t")).join("\n");
 export function savedToCsv(list) {
@@ -7,8 +8,46 @@ export function savedToCsv(list) {
 }
 const lastLabel = (r) => { if (!r) return ""; try { const o = typeof r === "string" && r.startsWith("{") ? JSON.parse(r) : r; return typeof o === "object" ? o.outcome || "" : String(o); } catch { return String(r); } };
 
-export function initSaved(S) {
+export function initSaved(S, { onDrill } = {}) {
+  let tab = "saved";   // 'saved' | 'practise'
+  const renderPractise = () => {
+    const supported = S.missedSupported !== false;    // 404 from the backend -> hide the whole section, Saved words works as before
+    $("#savedSeg").hidden = !supported;
+    if (!supported) tab = "saved";
+    const n = S.missed.length;
+    $("#practiseBadge").textContent = supported && n ? `(${n})` : "";
+    $("#segSaved").setAttribute("aria-pressed", String(tab === "saved"));
+    $("#segPractise").setAttribute("aria-pressed", String(tab === "practise"));
+    $("#panelSaved").hidden = tab !== "saved";
+    $("#panelPractise").hidden = tab !== "practise" || !supported;
+    $("#practiseCount").textContent = n ? `(${n})` : "";
+    $("#practiseEmpty").hidden = n > 0 || !S.missedLoaded;
+    $("#btnDrillAll").hidden = n === 0;
+    const err = $("#practiseError"); err.hidden = !S.missedError; err.textContent = S.missedError ? `${S.missedError} Tap Refresh to retry.` : "";
+    const un = $("#practiseUndo"); un.hidden = !S.missedUndo; if (S.missedUndo) $("#practiseUndoText").textContent = `Marked \u201c${S.missedUndo.text}\u201d as known.`;
+    $("#practiseList").innerHTML = S.missed.map((w) => {
+      const dots = w.needed ? `<span class="streak-mini" aria-hidden="true">${Array.from({ length: w.needed }, (_, i) => `<i class="${i < w.correctStreak ? "on" : ""}"></i>`).join("")}</span>` : "";
+      return `
+      <li class="saved-item practise" data-id="${esc(w.id)}">
+        <div class="info"><div class="hz" lang="zh-CN">${esc(w.text)}</div><div class="py">${esc(formatPinyin(w.pinyin))}${w.meaning ? " \u00b7 " + esc(w.meaning) : ""}</div>
+          <div class="py">missed ${w.missCount}\u00d7 \u00b7 ${esc(streakLabel(w.correctStreak, w.needed))}${dots}</div></div>
+        <div class="acts">
+          <button type="button" class="btn primary" data-drill="${esc(w.id)}" aria-label="Drill ${esc(w.text)}">Drill</button>
+          <button type="button" class="btn" data-known="${esc(w.id)}" aria-label="Mark ${esc(w.text)} as known">Mark known</button>
+        </div>
+      </li>`; }).join("");
+  };
+  $("#segSaved").addEventListener("click", () => { tab = "saved"; renderPractise(); });
+  $("#segPractise").addEventListener("click", () => { tab = "practise"; S.loadMissed(); renderPractise(); });
+  $("#practiseList").addEventListener("click", (e) => {
+    const k = e.target.closest("[data-known]"); if (k) return S.markKnown(k.dataset.known);
+    const d = e.target.closest("[data-drill]"); if (d && onDrill) onDrill(d.dataset.drill);
+  });
+  $("#btnDrillAll").addEventListener("click", () => onDrill && onDrill(null));
+  $("#btnRefreshPractise").addEventListener("click", () => { S.missedError = ""; S.loadMissed(); });
+  $("#btnUndoKnown").addEventListener("click", () => S.undoKnown());
   const render = () => {
+    renderPractise();
     const items = S.words;
     $("#savedCount").textContent = items.length ? `(${items.length})` : "";
     $("#savedEmpty").hidden = items.length > 0;
@@ -38,5 +77,5 @@ export function initSaved(S) {
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "saved-words.csv";
     document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   });
-  return { render };
+  return { render, showTab(t) { tab = t; renderPractise(); } };
 }

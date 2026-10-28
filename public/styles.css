@@ -277,3 +277,64 @@ body[data-auth="out"] .topbar, body[data-auth="out"] #layout, body[data-auth="ou
 .st-coach { flex-direction: row; align-items: center; gap: 12px; }
 .fb-body .fb-status { color: var(--muted); font-size: 14px; }
 .pause-msg { font-weight: 600; }
+
+/* ===================== missed-word highlights, Words to practise, drill ===================== */
+:root { --sub: #5a189a; --sub-bg: #e9d9ff; }
+@media (prefers-color-scheme: dark) { :root { --sub: #d9b8ff; --sub-bg: #3b1f60; } }
+/* every status has its own underline STYLE + a small marker glyph + screen-reader text, so colour is never the only cue */
+.hl { text-decoration-line: underline; text-decoration-thickness: 3px; text-underline-offset: 7px; padding: 0 1px; border-radius: 4px; }
+.hl-wrong { text-decoration-style: wavy; text-decoration-color: var(--bad); background: var(--bad-bg); }
+.hl-missed { text-decoration-style: dotted; text-decoration-thickness: 4px; text-decoration-color: var(--ok); background: var(--ok-bg); }
+.hl-substituted { text-decoration-line: underline line-through; text-decoration-style: double; text-decoration-color: var(--sub); background: var(--sub-bg); }
+.hl-uncertain { text-decoration-style: dashed; text-decoration-thickness: 2px; text-decoration-color: var(--muted); background: none; }
+.hl-m { font-size: .4em; font-weight: 800; line-height: 1; vertical-align: super; letter-spacing: 0; margin: 0 2px 0 1px; padding: 1px 4px; border-radius: 9px; font-family: system-ui, sans-serif; }
+.hl-m-wrong, .legend .hl-wrong + .hl-m { background: var(--bad); color: var(--card); }
+.hl-m-missed, .legend .hl-missed + .hl-m { background: var(--ok); color: var(--card); }
+.hl-m-substituted, .legend .hl-substituted + .hl-m { background: var(--sub); color: var(--card); }
+.hl-m-uncertain, .legend .hl-uncertain + .hl-m { background: var(--muted); color: var(--card); }
+.legend .hl { font-size: 15px; }
+.legend .hl-m { font-size: 11px; vertical-align: baseline; margin: 0 4px 0 2px; }
+.lg.lg-w-missed, .lg.lg-w-wrong, .lg.lg-w-sub, .lg.lg-w-unsure { font-weight: 600; background: none; padding: 1px 4px; white-space: nowrap; }
+.result-script { font-size: 28px; line-height: 2.2; margin: 2px 0 8px; overflow-wrap: anywhere; }
+.flagwrap { margin: 10px 0; }
+.h3 { font-size: 17px; margin: 0 0 6px; }
+.flag-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.flag { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; }
+.flag .w { font-size: 26px; font-weight: 700; }
+.flag .py { color: var(--muted); font-size: 16px; }
+.flag .why { font-size: 15px; font-weight: 600; }
+.flag .heard { font-size: 15px; color: var(--sub); font-weight: 600; }
+.flag.is-uncertain .why { color: var(--muted); font-weight: 500; }
+.saved-note { margin: 8px 0 0; padding: 8px 10px; border-left: 4px solid var(--accent); background: var(--bg); font-size: 15px; }
+
+/* segmented control (Saved tab) */
+.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 2px solid var(--line); border-radius: 12px; overflow: hidden; flex: none; }
+.seg[hidden] { display: none; }
+.seg-btn { min-height: var(--tap); padding: 0 8px; font: inherit; font-weight: 700; font-size: 16px; color: var(--text); background: var(--card); border: 0; cursor: pointer; }
+.seg-btn + .seg-btn { border-left: 2px solid var(--line); }
+.seg-btn[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); }
+.seg-count { font-weight: 800; }
+.seg-btn:focus-visible { outline: 3px solid var(--accent); outline-offset: -4px; }
+.saved-item .acts { display: flex; gap: 8px; flex: none; flex-wrap: wrap; justify-content: flex-end; }
+.saved-item .acts .btn { min-height: var(--tap); padding: 0 14px; }
+.saved-item.practise { flex-wrap: wrap; }
+.streak-mini { display: inline-flex; gap: 3px; vertical-align: middle; margin-left: 4px; }
+.streak-mini i, .streak-dots i { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--good); display: inline-block; }
+.streak-mini i.on, .streak-dots i.on { background: var(--good); }
+.streak-dots { display: inline-flex; gap: 6px; margin-right: 10px; vertical-align: middle; }
+.streak-dots i { width: 18px; height: 18px; }
+
+/* drill */
+body[data-view="drill"] #view-drill { display: flex; padding: 0; gap: 0; overflow: hidden; }
+body[data-view="drill"] #view-practice { display: none; }
+.drill-word { font-size: 64px !important; line-height: 1.3 !important; text-align: center; min-height: 0 !important; margin: 4px 0; }
+.drill-py { text-align: center; font-size: 26px; color: var(--accent); margin: 0 0 4px; }
+.drill-example { text-align: center; font-size: 20px; color: var(--muted); margin: 4px 0; }
+#drillCard .row { justify-content: center; }
+.streak { display: flex; align-items: center; justify-content: center; margin-top: 8px; flex-wrap: wrap; gap: 4px; }
+.ctl-row.three { grid-template-columns: repeat(3, 1fr); }
+.st-ready { flex-direction: column; }
+@media (min-width: 900px) {
+  #view-drill { grid-column: 2; grid-row: 1; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--bg); }
+  .drill-word { font-size: 72px !important; }
+}

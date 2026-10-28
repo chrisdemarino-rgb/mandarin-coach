@@ -1,6 +1,7 @@
 // Cue card: what the learner sees for the current piece. Stage directions render as muted badges (piece.display is pre-escaped HTML).
 import { esc } from "./dom.js";
 import { FADE_LABELS } from "../session.js";
+import { highlightPieceHtml } from "../highlight.js";
 
 /** Returns {html|text, cls} for the cue area. */
 export function renderCue(els, S, { peek }) {
@@ -23,7 +24,9 @@ export function renderCue(els, S, { peek }) {
   els.pieceLabel.textContent = chunk.pieces.length > 1 ? `Part ${S.pieceIdx + 1} of ${chunk.pieces.length}` : "";
   if (!S.sessionActive && S.state !== "paused") { t.innerHTML = piece.display; return; }
 
-  if (!fading || peek) { t.innerHTML = piece.display; return; }
+  // after an attempt, mark the flagged words in the displayed text (underline style + marker + SR text; stage-direction cues stay as they are)
+  const reviewing = ["result", "playback"].includes(S.state) && S.assessment && S.assessment.wordStatus && S.assessment.wordStatus.length;
+  if (!fading || peek) { t.innerHTML = reviewing ? highlightPieceHtml(piece, S.assessment.wordStatus) : piece.display; return; }
   // fading: level 1 keywords + pinyin, 2 first characters, 3 topic hint, 4 nothing. Cues come from POST /api/cues.
   const c = S.cue;
   if (S.cueLoading || !c) { t.classList.add("placeholder"); t.textContent = "Loading cue…"; return; }

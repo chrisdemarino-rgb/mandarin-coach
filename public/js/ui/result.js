@@ -2,6 +2,7 @@
 // no invented scores; no assessment => no verdict at all (the error panel handles that case).
 import { esc, formatPinyin } from "./dom.js";
 import { verdict, isPass } from "../assess.js";
+import { highlightPieceHtml, flaggedWords, groupFlagged, problemWords, reasonText, STATUS_INFO } from "../highlight.js";
 
 const TONE_NAME = { 1: "1st", 2: "2nd", 3: "3rd", 4: "4th", 0: "neutral", 5: "neutral" };
 
@@ -45,16 +46,7 @@ export function createResultView({ onSave }) {
       const first = current !== a;
       current = a; el.hidden = false;
       if (first) sel.clear();
-      const pass = isPass(a);
-      const badge = q("#verdictIcon");
-      badge.className = "score-badge " + (pass ? "s-good" : "s-review");
-      badge.textContent = pass ? "\u2713" : String(a.confirmed.length);
-      q("#verdict").textContent = verdict(a);
-      const notes = [];
-      if (a.overall !== null) notes.push(`Overall ${a.overall}`);
-      if (a.basis === "transcript") notes.push("Compared with what the engine heard you say");
-      if (a.lowConfidence) notes.push("Low confidence: treat this as a rough guide");
-      q("#verdictNote").textContent = notes.join(" · ");
+      this.head(S, opts);
       q("#resultChars").innerHTML = a.chars.map((c, i) => {
         if (!c.han) return `<span class="rch plain" data-han="0" aria-hidden="true"><span>${esc(c.ch)}</span><small></small></span>`;
         const cls = c.review ? "review" : c.unsure ? "unsure" : "";
@@ -69,9 +61,44 @@ export function createResultView({ onSave }) {
       this.update(S, opts);
       renderSel();
     },
+    /** Verdict line + badge. Re-run on every update: word statuses can arrive after the assessment. */
+    head(S) {
+      const a = S.assessment;
+      const pass = isPass(a), probs = problemWords(a.wordStatus).length;
+      const badge = q("#verdictIcon");
+      badge.className = "score-badge " + (pass ? "s-good" : a.gated ? "s-none" : "s-review");
+      badge.textContent = pass ? "\u2713" : a.gated ? "?" : probs || !a.confirmed.length ? "!" : String(a.confirmed.length);
+      q("#verdict").textContent = verdict(a);
+      const notes = [];
+      if (a.overall !== null && !a.gated) notes.push(`Overall ${a.overall}`);
+      if (a.basis === "transcript") notes.push("Compared with what the engine heard you say");
+      if (a.lowConfidence) notes.push("Low confidence: treat this as a rough guide");
+      q("#verdictNote").textContent = notes.join(" \u00b7 ");
+    },
+    /** Flagged-word list, "added to Words to practise" and "extra words" notes. */
+    flags(S, opts) {
+      const a = S.assessment, list = groupFlagged(flaggedWords(a.wordStatus));
+      const saved = [...new Set([...(a.savedMissed || []), ...(S.savedMissedExtra || [])])];
+      const wrap = q("#flagWrap");
+      wrap.hidden = !list.length && !saved.length && !a.insertedText;
+      q("#flagList").innerHTML = list.map((w) => {
+        const info = STATUS_INFO[w.status];
+        const why = w.status === "substituted" ? "Said something else" : w.status === "missed" ? `Missed \u00b7 ${reasonText(w)}` : w.status === "wrong" ? `Wrong \u00b7 ${reasonText(w)}` : `Not sure${w.reason ? ` \u00b7 ${reasonText(w).replace(/^not sure (about )?/, "")}` : ""}`;
+        return `<li class="flag is-${w.status}"><span class="w"><span class="hl hl-${w.status}">${esc(w.text)}</span><sup class="hl-m hl-m-${w.status}" aria-hidden="true">${info.marker}</sup></span>${w.pinyin ? `<span class="py">${esc(formatPinyin(w.pinyin))}</span>` : ""}<span class="why">${esc(why)}</span>${w.heard ? `<span class="heard">heard: <span lang="zh-CN">${esc(w.heard)}</span></span>` : ""}</li>`;
+      }).join("");
+      const ins = q("#insertedNote"); ins.hidden = !a.insertedText; ins.textContent = a.insertedText ? `Extra words I heard that aren't in the script: ${a.insertedText}` : "";
+      const sn = q("#savedNote"); sn.hidden = !saved.length; sn.textContent = saved.length ? `Added to Words to practise: ${saved.join(", ")}` : "";
+      q("#legendWords").hidden = !list.length;
+      // the highlighted line: shown here only when the cue card above is NOT already showing the full text (fading cues)
+      const sw = q("#resultScriptWrap"), piece = S.piece;
+      const show = !!(piece && list.length && opts.cueShowsText === false);
+      sw.hidden = !show;
+      if (show) q("#resultScript").innerHTML = highlightPieceHtml(piece, a.wordStatus);
+    },
     /** Coach text / corrections (streamed in after the assessment). */
     update(S, opts) {
       const a = S.assessment;
+      this.head(S, opts); this.flags(S, opts);
       const wrap = q("#feedbackWrap");
       const lines = S.coachLines.filter(Boolean);
       const corr = S.corrections || [];
@@ -81,7 +108,7 @@ export function createResultView({ onSave }) {
         q("#feedbackBody").hidden = !fbOpen;
         const status = !S.coachDone && S.statusStage ? `<p class="fb-status">${S.statusStage === "speaking" ? "Coach is speaking…" : "Coach is writing feedback…"}</p>` : "";
         const corrHtml = corr.length ? `<div class="corrections">${corr.map((c) => `<div class="corr k-${esc(c.kind)}"><div class="ct">${c.kind === "tone" ? '<span class="badge badge-pause">tone</span>' : c.kind === "model" ? '<span class="badge">not sure</span>' : `<span class="badge">${esc(c.kind)}</span>`}<span lang="zh-CN">${esc(c.targetText || "")}</span></div>${c.explanationZh ? `<div class="cx" lang="zh-CN">${esc(c.explanationZh)}</div>` : ""}</div>`).join("")}</div>` : "";
-        q("#feedbackBody").innerHTML = `<div class="coach-lines">${lines.map((l) => `<p class="${esc(l.role)}">${esc(l.text)}</p>`).join("")}</div>${corrHtml}${status}`;
+        q("#feedbackBody").innerHTML = `<div class="coach-lines">${lines.map((l) => `<p class="${esc(l.role)}">${esc(l.text)}${l.caption ? `<small class="muted cap"> ${esc(l.caption)}</small>` : ""}</p>`).join("")}</div>${corrHtml}${status}`;
       }
       const tag = q("#engineTag");
       tag.className = "engine-tag muted" + (a.mock ? " is-mock" : "");

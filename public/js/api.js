@@ -19,6 +19,8 @@ export class ApiError extends Error {
 const listeners = { mock: new Set(), auth: new Set() };
 export const onMock = (fn) => listeners.mock.add(fn);      // fn({source, mock, engine})
 export const onAuthLost = (fn) => listeners.auth.add(fn);
+/** Tell the MOCK banner an event came from the mock engine (used by api-words.js). */
+export const noteMock = (data, source) => { if (data && data.mock === true) fire(listeners.mock, { source, mock: true, engine: data.engine }); };
 const fire = (set, ...a) => set.forEach((fn) => { try { fn(...a); } catch (e) { console.error(e); } });
 
 async function errorFromResponse(res) {
@@ -37,7 +39,7 @@ async function errorFromResponse(res) {
   });
 }
 
-async function req(method, path, { json, body, signal, headers } = {}) {
+export async function req(method, path, { json, body, signal, headers } = {}) {
   let res;
   try {
     res = await fetch(path, {
@@ -56,7 +58,7 @@ async function req(method, path, { json, body, signal, headers } = {}) {
   }
   return res;
 }
-const jsonOf = async (res) => (res.status === 204 ? null : res.json());
+export const jsonOf = async (res) => (res.status === 204 ? null : res.json());
 
 /* ---------------- auth / health / prefs ---------------- */
 export const login = (passcode) => req("POST", "/api/login", { json: { passcode } }).then(jsonOf);
@@ -105,7 +107,7 @@ export function cues(chunkText, level) {
 export const prefetchCues = (text, levels = [1, 2, 3, 4]) => levels.forEach((l) => cues(text, l).catch(() => {}));
 
 /* ---------------- attempt (multipart -> SSE) ---------------- */
-const extFor = (mime) => (/mp4|m4a|aac/.test(mime) ? "m4a" : /webm/.test(mime) ? "webm" : /ogg/.test(mime) ? "ogg" : /wav/.test(mime) ? "wav" : /mpeg|mp3/.test(mime) ? "mp3" : "bin");
+export const extFor = (mime) => (/mp4|m4a|aac/.test(mime) ? "m4a" : /webm/.test(mime) ? "webm" : /ogg/.test(mime) ? "ogg" : /wav/.test(mime) ? "wav" : /mpeg|mp3/.test(mime) ? "mp3" : "bin");
 
 /** Parse a text/event-stream from a fetch Response, calling onEvent(name, data) per event. */
 export async function readSse(res, onEvent) {

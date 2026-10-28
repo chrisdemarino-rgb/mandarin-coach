@@ -1,6 +1,7 @@
 // DEV/TEST ONLY. Tiny OpenAI-compatible fake for frontend tests (never used in production, not served by Express).
 //   node fake-openai.mjs [port=8094]    then start the app with OPENAI_API_KEY=fake OPENAI_BASE_URL=http://127.0.0.1:8094/v1
 // chat/completions -> grounded coach JSON built from the facts in the prompt, or a topic hint for level-3 cues;
+// FAKE_TRANSCRIPT=... overrides the transcription text (lets the real server see omitted/substituted words).
 // audio/speech -> a short quiet WAV (served as audio/mpeg; Chrome sniffs it), audio/transcriptions -> fixed text.
 import http from "node:http";
 
@@ -38,6 +39,6 @@ http.createServer(async (req, res) => {
     res.write("data: [DONE]\n\n"); return res.end();
   }
   if (req.url === "/v1/audio/speech") { res.writeHead(200, { "Content-Type": "audio/mpeg" }); return res.end(AUDIO); }
-  if (req.url === "/v1/audio/transcriptions") { res.writeHead(200, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ text: "我们今天练习中文。" })); }
+  if (req.url === "/v1/audio/transcriptions") { res.writeHead(200, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ text: process.env.FAKE_TRANSCRIPT || "我们今天练习中文。" })); }
   res.writeHead(404); res.end();
 }).listen(port, "127.0.0.1", () => console.log(`fake openai on ${port}`));

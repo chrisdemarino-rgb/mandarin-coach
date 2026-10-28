@@ -8,10 +8,13 @@ import { renderCue } from "./ui/cue.js";
 import { createResultView } from "./ui/result.js";
 import { renderChunkList } from "./ui/chunks.js";
 import { initSaved } from "./ui/saved.js";
+import { createDrill } from "./drill.js";
+import { initDrillUI } from "./ui/drill.js";
 import { isPass } from "./assess.js";
 
 const S = createSession();
-window.__coach = { S, api }; // debugging / tests
+const D = createDrill(S);
+window.__coach = { S, D, api }; // debugging / tests
 const store = S.store;
 
 let peek = false, mockSeen = false, authed = false, booted = false;
@@ -20,9 +23,11 @@ let rafId = 0;
 
 /* ---------------- views ---------------- */
 function setView(v) {
+  if (v !== "drill" && document.body.dataset.view === "drill") D.leave();   // leaving the drill releases the mic and stops audio
   document.body.dataset.view = v;
-  $$(".tab").forEach((t) => (t.getAttribute("data-view") === v ? t.setAttribute("aria-current", "page") : t.removeAttribute("aria-current")));
-  if (v === "saved") S.loadWords();
+  const tabView = v === "drill" ? "saved" : v;   // the drill lives under the Saved tab
+  $$(".tab").forEach((t) => (t.getAttribute("data-view") === tabView ? t.setAttribute("aria-current", "page") : t.removeAttribute("aria-current")));
+  if (v === "saved") { S.loadWords(); S.loadMissed(); }
 }
 $$(".tab").forEach((t) => t.addEventListener("click", () => setView(t.dataset.view)));
 $("#btnGoPractice").addEventListener("click", () => setView("practice"));
@@ -140,7 +145,8 @@ $("#btnTestConn").addEventListener("click", async () => {
 
 /* ---------------- result / saved ---------------- */
 const resultView = createResultView({ onSave: (w) => S.saveWord(w).then(() => toast(S.saveMsg)) });
-initSaved(S);
+initSaved(S, { onDrill: (wordId) => { setView("drill"); D.start(wordId ? { wordId } : {}); } });   // D.start runs unlock+arm inside this tap
+initDrillUI(D, S, { onLeave: () => setView("saved") });
 
 /* ---------------- controls ---------------- */
 const btn = { primary: $("#btnPrimary"), pause: $("#btnPause"), retry: $("#btnRetry"), skip: $("#btnSkip"), finish: $("#btnFinish") };
@@ -239,7 +245,7 @@ function render() {
 
   // result
   if ((st === "result" || st === "playback") && S.assessment && S.assessment.ok) {
-    const o = { showPinyin: store.settings.showPinyin, showFeedback: store.settings.showFeedback };
+    const o = { showPinyin: store.settings.showPinyin, showFeedback: store.settings.showFeedback, cueShowsText: S.practiceMode !== "fading_cues" || peek };
     if (resultView.shown !== S.assessment) { resultView.show(S, o); resultView.shown = S.assessment; } else { resultView.el.hidden = false; resultView.update(S, o); }
   } else { resultView.hide(); resultView.shown = null; }
   $("#btnPlayback").disabled = st !== "result" || !S.recording;
@@ -319,7 +325,7 @@ async function boot() {
     S.applyServerPrefs(prefs);
     loadSettingsForm();
   } catch (e) { S.prefsError = ""; }
-  S.loadWords();
+  S.loadWords(); S.loadMissed();
   render();
 }
 async function init() {

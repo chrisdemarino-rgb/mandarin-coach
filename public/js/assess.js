@@ -2,6 +2,8 @@
 // Rules (PLAN.md): only tone decision === "review" is a mistake; "uncertain" is shown softly as "not sure";
 // no score of 0 / invented scores (overall may be null); status !== "ok" means NO assessment.
 
+import { normalizeWordStatus, problemWords, problemSummary } from "./highlight.js";
+
 const HAN = /[\u3400-\u9fff]/;
 
 const toneDec = (s) => s && s.tone && s.tone.decision;
@@ -47,7 +49,16 @@ export function normalizeAssessment(data, fallbackText = "") {
   } else {
     chars = sylList.map((s) => charInfo(s.char, s, confMap, uncMap));
   }
+  // Policy gate (wrong sentence / no speech): no highlights, no verdict, "try again".
+  const gated = ok && (d.gate === "low_match" || d.matchesText === false);
+  const chunkText = fallbackText || referenceText;
+  const wordStatus = ok && !gated ? normalizeWordStatus(d.wordStatus, chunkText) : [];
+  const facts = d.facts || {};
   return {
+    gated, gateMessage: gated ? d.gateMessage || "That recording doesn't seem to match the sentence. Please say it again." : "",
+    wordStatus, chunkText, insertedText: typeof facts.insertedText === "string" ? facts.insertedText : Array.isArray(facts.insertedText) ? facts.insertedText.join(" ") : "",
+    savedMissed: normalizeSavedMissed(d.savedMissed),
+    canPraise: facts.canPraise !== false, completeness: typeof facts.completeness === "string" ? facts.completeness : "",   // canPraise:false => never "all correct"
     ok, status: ok ? "ok" : "unavailable", engine: d.engine || "", mock: d.mock === true, modelVersion: d.modelVersion || "",
     overall, chars, confirmed, uncertain, syllables, basis: d.basis || "script", referenceText,
     transcript: d.transcript || "", lowConfidence: !!d.lowConfidence, byIdx,
@@ -65,14 +76,31 @@ function charInfo(ch, s, confMap, uncMap) {
 }
 
 /** Passed = a real assessment with no confirmed tone error. (Overall grade alone is never a diagnosis.) */
-export const isPass = (a) => !!(a && a.ok && a.confirmed.length === 0);
+export const isPass = (a) => !!(a && a.ok && !a.gated && a.canPraise !== false && a.confirmed.length === 0 && problemWords(a.wordStatus).length === 0);
+
+/** savedMissed (words the backend just added to "Words to practise"): strings or {text}. -> string[] */
+export function normalizeSavedMissed(v) {
+  if (!Array.isArray(v)) return [];
+  return v.map((x) => (typeof x === "string" ? x : x && typeof x.text === "string" ? x.text : "")).filter(Boolean);
+}
+
+/** A `word_status` event (or late wordStatus) arriving after the assessment. Mutates `a`; ignored for gated takes. */
+export function applyWordStatus(a, list) {
+  if (!a || !a.ok || a.gated) return a;
+  a.wordStatus = normalizeWordStatus(list, a.chunkText);
+  return a;
+}
 
 /** One-line verdict, English. */
 export function verdict(a) {
   if (!a || !a.ok) return "No assessment obtained";
+  if (a.gated) return a.gateMessage;
   const n = a.confirmed.length, u = new Set(a.uncertain.map((x) => x.index)).size;
+  const words = problemSummary(a.wordStatus);   // never say "no problems" when a word was missed / different / wrong
   const parts = [];
-  parts.push(n === 0 ? "No tone problems detected" : n === 1 ? "1 tone to review" : `${n} tones to review`);
+  if (n > 0) parts.push(n === 1 ? "1 tone to review" : `${n} tones to review`);
+  parts.push(...words);
+  if (n === 0 && !words.length) parts.push(a.canPraise === false ? "A few spots need another go" : a.completeness === "unverified" ? "No tone problems detected (couldn't check for skipped words)" : "No tone problems detected");
   if (u) parts.push(u === 1 ? "not sure about 1 sound" : `not sure about ${u} sounds`);
   return parts.join(" · ");
 }

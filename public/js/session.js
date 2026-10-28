@@ -3,7 +3,8 @@
 import { buildChunks, chunkIndexForSentence, parseScript, splitAtPauses, countScriptChars, MAX_PIECE_CHARS } from "../shared/script.js";
 import { createMachine, createStore, hashString } from "./state.js";
 import * as api from "./api.js";
-import { normalizeAssessment, isPass, wordOutcome } from "./assess.js";
+import { normalizeAssessment, isPass, wordOutcome, applyWordStatus, normalizeSavedMissed } from "./assess.js";
+import * as apiWords from "./api-words.js";
 import { audio, getAudioEl, ensureInit, startAudioFromTap, micError, MicError, RECORDING_PROBLEMS } from "./audio-io.js";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -41,6 +42,8 @@ export function createSession() {
     stats: { attempts: 0, passed: 0, toneFlags: 0, skipped: 0, startedAt: 0, doneChunks: new Set(), weak: new Map() },
     saveMsg: "",
     words: [], wordsLoaded: false,
+    savedMissedExtra: [],     // savedMissed from the `done` event (assessment carries its own)
+    missed: [], missedSupported: null, missedError: "", missedLoaded: false, missedUndo: null,   // "Words to practise" (backend /api/words/missed)
     prefsError: "",
 
     subscribe(fn) { subs.add(fn); return () => subs.delete(fn); },
@@ -62,6 +65,7 @@ export function createSession() {
   let currentAttemptId = null;  // reused while retrying the SAME take
   let coachChain = Promise.resolve();
   let tickRaf = 0;
+  let pendingWordStatus = null; // a word_status event that arrived before the assessment
 
   const abortFlow = () => { runId++; if (ac) { ac.abort(); ac = null; } coachChain = Promise.resolve(); };
   const newFlow = () => { abortFlow(); ac = new AbortController(); return { run: runId, signal: ac.signal }; };
@@ -145,6 +149,7 @@ export function createSession() {
   function resetAttemptState() {
     S.assessment = null; S.attemptInfo = null; S.coachLines = []; S.coachAudio = []; S.corrections = [];
     S.coachDone = false; S.coachPlaying = false; S.statusStage = ""; S.error = null; S.notice = ""; S.pauseReason = "";
+    S.savedMissedExtra = []; pendingWordStatus = null;
     if (S.recording && S.recording.url) URL.revokeObjectURL(S.recording.url);
     S.recording = null; currentAttemptId = null;
   }
@@ -226,7 +231,7 @@ export function createSession() {
   /* ------------------------------------------------------------------ flow */
   async function enterPrompting({ forceModel = null } = {}) {
     const { run, signal } = newFlow();
-    S.error = null; S.assessment = null; S.attemptInfo = null; S.coachLines = []; S.coachAudio = []; S.corrections = []; S.coachDone = false; S.statusStage = "";
+    S.error = null; S.assessment = null; S.attemptInfo = null; S.coachLines = []; S.coachAudio = []; S.corrections = []; S.coachDone = false; S.statusStage = ""; S.savedMissedExtra = []; pendingWordStatus = null;
     if (!S.hasScript || !S.piece) { finishSession(); return; }
     const piece = S.piece;
     currentAttemptId = null;
@@ -436,9 +441,10 @@ export function createSession() {
           if (!alive(run)) return;
           if (name === "status") { S.statusStage = data.skipped ? S.statusStage : data.stage; if (data.skipped && data.message && data.stage !== "transcribing") S.notice = data.stage === "speaking" ? "Coach audio isn't available right now; showing text only." : data.message; }
           else if (name === "assessment") { gotAssessment = true; onAssessment(data, piece); }
-          else if (name === "coach_text") { S.coachLines[data.index] = { role: data.role || "", text: (S.coachLines[data.index]?.text || "") + (data.delta || "") }; }
+          else if (name === "word_status") { const list = Array.isArray(data) ? data : data && (data.wordStatus || data.words); if (S.assessment) applyWordStatus(S.assessment, list); else pendingWordStatus = list; }
+          else if (name === "coach_text") { S.coachLines[data.index] = { role: data.role || "", text: (S.coachLines[data.index]?.text || "") + (data.delta || ""), caption: data.caption || S.coachLines[data.index]?.caption || "" }; }
           else if (name === "coach_audio") { S.coachAudio[data.index] = { url: data.url, text: data.text }; queueCoachAudio(run, data.url); }
-          else if (name === "done") { S.corrections = data.corrections || []; S.attemptInfo = { ...(S.attemptInfo || {}), summary: data.summary || null }; S.coachDone = true; S.statusStage = ""; }
+          else if (name === "done") { S.corrections = data.corrections || []; if (data.savedMissed) S.savedMissedExtra = normalizeSavedMissed(data.savedMissed); if (data.wordStatus && S.assessment && !S.assessment.wordStatus.length) applyWordStatus(S.assessment, data.wordStatus); S.attemptInfo = { ...(S.attemptInfo || {}), summary: data.summary || null }; S.coachDone = true; S.statusStage = ""; }
           else if (name === "error") { terminalError = data; }
           S.emit();
         },
@@ -454,6 +460,7 @@ export function createSession() {
     try { audio.markDone(); } catch { /* ignore */ }
     S.statusStage = "";
     S.emit();
+    S.loadMissed();   // the backend auto-feeds "Words to practise" from missed words: refresh after every attempt
   }
 
   function onUploadFailure(e) {
@@ -486,6 +493,8 @@ export function createSession() {
 
   function onAssessment(data, piece) {
     const a = normalizeAssessment(data, piece.spoken);
+    if (pendingWordStatus && !a.wordStatus.length) applyWordStatus(a, pendingWordStatus);
+    pendingWordStatus = null;
     S.assessment = a;
     if (!a.ok) { // status unavailable inside an assessment event: treat as no-assessment error
       onAttemptError({ code: "unavailable", message: "No assessment obtained for that take.", retryable: true, canSkip: true, engine: a.engine, mock: a.mock });
@@ -576,6 +585,25 @@ export function createSession() {
     const sourceChunk = S.piece ? S.piece.spoken : S.chunk ? S.chunk.spoken || "" : "";
     try { await api.words.add({ text, pinyin, meaning, sourceChunk: sourceChunk.slice(0, 200) }); S.saveMsg = `Saved “${text}”.`; await S.loadWords(); }
     catch (e) { S.saveMsg = e.message; S.emit(); }
+  };
+  /* ------------------------------------------------------------------ words to practise (rolling list, fed by the backend) */
+  S.loadMissed = async () => {
+    if (S.missedSupported === false) return;
+    try { S.missed = await apiWords.missed.list(); S.missedSupported = true; S.missedError = ""; S.missedLoaded = true; }
+    catch (e) { if (apiWords.isUnsupported(e)) { S.missedSupported = false; S.missed = []; } else if (!e.auth) S.missedError = e.message || "Couldn't load Words to practise."; }
+    S.emit();
+  };
+  S.markKnown = async (id) => {
+    const w = S.missed.find((x) => x.id === id); if (!w) return;
+    try { await apiWords.missed.known(id); S.missed = S.missed.filter((x) => x.id !== id); S.missedUndo = { id, text: w.text }; S.missedError = ""; }
+    catch (e) { S.missedError = e.message || "Couldn't update that word."; }
+    S.emit();
+  };
+  S.undoKnown = async () => {
+    const u = S.missedUndo; if (!u) return;
+    S.missedUndo = null;
+    try { await apiWords.missed.learning(u.id); } catch (e) { S.missedError = e.message || "Couldn't restore that word."; }
+    await S.loadMissed();
   };
   S.removeWord = async (id) => { try { await api.words.remove(id); S.words = S.words.filter((w) => w.id !== id); } catch (e) { S.saveMsg = e.message; } S.emit(); };
 

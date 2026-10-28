@@ -58,12 +58,12 @@ export function createOpenAI(cfg) {
     },
 
     /** Non-streaming JSON completion -> parsed object. */
-    async chatJson({ messages, signal, model = cfg.openai.coachModel, maxTokens = 200, timeoutMs = 15_000 }) {
+    async chatJson({ messages, signal, model = cfg.openai.coachModel, maxTokens = 200, timeoutMs = 15_000, temperature = 0.3 }) {
       if (!apiKey) throw notConfigured('LLM');
       const sig = signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
       const res = await checked(await net(fetch(`${baseUrl}/chat/completions`, {
         method: 'POST', headers: { ...auth(), 'Content-Type': 'application/json' }, signal: sig,
-        body: JSON.stringify({ model, messages, temperature: 0.3, max_tokens: maxTokens, response_format: { type: 'json_object' } }),
+        body: JSON.stringify({ model, messages, temperature, max_tokens: maxTokens, response_format: { type: 'json_object' } }),
       }), 'chat'), 'chat');
       const j = await res.json();
       try { return JSON.parse(j.choices?.[0]?.message?.content ?? ''); } catch { throw new ServiceError('llm_bad_json', 'The language model returned invalid JSON.', { retryable: true }); }

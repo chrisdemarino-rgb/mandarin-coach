@@ -1,0 +1,47 @@
+{
+ "name": "omits-football",
+ "chunkText": "小明早上起床，吃了早饭，骑自行车去学校。他在学校学习数学和英语，下午回家踢足球。",
+ "transcript": "小明早上起床，吃了早饭，骑自行车去学校。他在学校学习数学和英语。",
+ "llmRaw": {
+  "ideas": [
+   {
+    "id": "i1",
+    "refQuote": "小明早上起床",
+    "covered": true,
+    "evidence": "小明早上起床",
+    "confidence": "high"
+   },
+   {
+    "id": "i2",
+    "refQuote": "吃了早饭",
+    "covered": true,
+    "evidence": "吃了早饭",
+    "confidence": "high"
+   },
+   {
+    "id": "i3",
+    "refQuote": "骑自行车去学校",
+    "covered": true,
+    "evidence": "骑自行车去学校",
+    "confidence": "high"
+   },
+   {
+    "id": "i4",
+    "refQuote": "他在学校学习数学和英语",
+    "covered": true,
+    "evidence": "他在学校学习数学和英语",
+    "confidence": "high"
+   },
+   {
+    "id": "i5",
+    "refQuote": "下午回家踢足球",
+    "covered": false,
+    "evidence": null,
+    "confidence": "high"
+   }
+  ],
+  "corrections": [],
+  "summaryZh": ""
+ },
+ "note": "real gpt-4.1-mini output on real gpt-4o-transcribe text of OpenAI-TTS audio; no keys, no audio"
+}

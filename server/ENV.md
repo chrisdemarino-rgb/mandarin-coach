@@ -22,6 +22,7 @@ Never commit secrets, never put them in the frontend, never log them (logs are r
 | `LLM_PROVIDER` | Coaching LLM provider | only `openai` is implemented; anything else logs a warning and falls back |
 | `OPENAI_BASE_URL`, `COACH_MODEL`, `STT_MODEL`, `OPENAI_TTS_MODEL` | Overrides | `gpt-4.1-mini`, `gpt-4o-transcribe`, `gpt-4o-mini-tts` |
 | `STT_WAIT_MS` | How long to wait for the STT transcript after TonePerfect returned, before going acoustic-only | `3000` |
+| `RETELL_MODEL` | Model for the retell meaning comparison (JSON mode, temperature 0, max 700 tokens) | `COACH_MODEL`, else `gpt-4.1-mini` |
 | `COACH_LLM_TONE` | `1`/`true`: let the LLM phrase tone explanations (≈ +1.5–3 s; default: code-built lines) | off |
 | `MOCK_FORCE=unavailable` | Dev: make the mock engine always fail | Exercises the "no assessment obtained" Retry/Skip UI |
 
@@ -36,3 +37,4 @@ Never commit secrets, never put them in the frontend, never log them (logs are r
 
 Chris only ever has to supply: `APP_PASSCODE`, `TONEPERFECT_API_KEY`, `OPENAI_API_KEY`, and optionally `AZURE_SPEECH_KEY` + `AZURE_SPEECH_REGION`.
 - **Word detection / latency constants** (`ASSESSMENT_POLICY`, not env-configurable except `STT_WAIT_MS`): `ACOUSTIC_MISSING_WORD_MAX=65`, `ACOUSTIC_INITIAL_ABSENT_MAX=30`, `STT_MIN_COVERAGE=0.3`, `SAVE_LOW_SCORE_WORD_MAX=55`, `LONG_PAUSE_MS=500`; `DRILL_GRADUATE_STREAK=3`. Outbound HTTP uses undici keep-alive; fixed coach phrases are pre-synthesised at startup (TTS cache). `node server/scripts/measure-latency.js [--runs N --tp-delay ms --llm-tone]` measures stage timings against fakes + real OpenAI.
+- **Retell constants** (`ASSESSMENT_POLICY`, not env-configurable): `RETELL_TONE_WAIT_MS=3000` (max extra wait for TonePerfect after the meaning comparison is ready), `RETELL_COMPARE_MAX_MS=9000` (wall cap incl. 1 retry), `RETELL_MAX_TRANSCRIPT_HANZI=300` (`retell_too_long`). Retell needs `OPENAI_API_KEY` (STT is mandatory; the LLM compare degrades to `comparisonStatus:"unavailable"`). Dependency: `opencc-js` (traditional -> simplified for STT output).

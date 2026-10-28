@@ -1,0 +1,66 @@
+{
+ "name": "wrong-meaning",
+ "chunkText": "小明早上起床，吃了早饭，骑自行车去学校。他在学校学习数学和英语，下午回家踢足球。",
+ "transcript": "小明早上起床，吃了早饭，走路去学校。他在学校学习历史和音乐，下午回家看电视。",
+ "llmRaw": {
+  "ideas": [
+   {
+    "id": "i1",
+    "refQuote": "小明早上起床",
+    "covered": true,
+    "evidence": "小明早上起床",
+    "confidence": "high"
+   },
+   {
+    "id": "i2",
+    "refQuote": "吃了早饭",
+    "covered": true,
+    "evidence": "吃了早饭",
+    "confidence": "high"
+   },
+   {
+    "id": "i3",
+    "refQuote": "骑自行车去学校",
+    "covered": false,
+    "evidence": null,
+    "confidence": "high"
+   },
+   {
+    "id": "i4",
+    "refQuote": "在学校学习数学和英语",
+    "covered": false,
+    "evidence": null,
+    "confidence": "high"
+   },
+   {
+    "id": "i5",
+    "refQuote": "下午回家踢足球",
+    "covered": false,
+    "evidence": null,
+    "confidence": "high"
+   }
+  ],
+  "corrections": [
+   {
+    "kind": "wrong_meaning",
+    "ideaId": "i3",
+    "quote": "走路去学校",
+    "explanationZh": "交通方式错误"
+   },
+   {
+    "kind": "wrong_meaning",
+    "ideaId": "i4",
+    "quote": "学习历史和音乐",
+    "explanationZh": "学习科目错误"
+   },
+   {
+    "kind": "wrong_meaning",
+    "ideaId": "i5",
+    "quote": "下午回家看电视",
+    "explanationZh": "活动内容错误"
+   }
+  ],
+  "summaryZh": ""
+ },
+ "note": "real gpt-4.1-mini output on real gpt-4o-transcribe text of OpenAI-TTS audio; no keys, no audio"
+}

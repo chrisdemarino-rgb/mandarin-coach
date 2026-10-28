@@ -1,0 +1,47 @@
+{
+ "name": "all-ideas-own-words",
+ "chunkText": "小明早上起床，吃了早饭，骑自行车去学校。他在学校学习数学和英语，下午回家踢足球。",
+ "transcript": "小明每天早晨起来先吃早餐，然后骑单车去上学。在学校里他学数学跟英语，放学回到家以后就去踢足球。",
+ "llmRaw": {
+  "ideas": [
+   {
+    "id": "i1",
+    "refQuote": "小明早上起床",
+    "covered": true,
+    "evidence": "小明每天早晨起来",
+    "confidence": "high"
+   },
+   {
+    "id": "i2",
+    "refQuote": "吃了早饭",
+    "covered": true,
+    "evidence": "先吃早餐",
+    "confidence": "high"
+   },
+   {
+    "id": "i3",
+    "refQuote": "骑自行车去学校",
+    "covered": true,
+    "evidence": "骑单车去上学",
+    "confidence": "high"
+   },
+   {
+    "id": "i4",
+    "refQuote": "他在学校学习数学和英语",
+    "covered": true,
+    "evidence": "在学校里他学数学跟英语",
+    "confidence": "high"
+   },
+   {
+    "id": "i5",
+    "refQuote": "下午回家踢足球",
+    "covered": true,
+    "evidence": "放学回到家以后就去踢足球",
+    "confidence": "high"
+   }
+  ],
+  "corrections": [],
+  "summaryZh": "小明早上起床吃饭去学校学习"
+ },
+ "note": "real gpt-4.1-mini output on real gpt-4o-transcribe text of OpenAI-TTS audio; no keys, no audio"
+}

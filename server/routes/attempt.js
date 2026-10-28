@@ -14,6 +14,7 @@ import multer from 'multer';
 import { deriveFacts } from '../engines/assessment/index.js';
 import { analyzeWords, emptyWordFacts } from '../engines/assessment/words.js';
 import { runCoach, splitSentences, hanzi, wordCorrection, planCorrections, factCorrection, GATE_PHRASE_ZH, FIXED_PHRASES_ZH, DRILL_OK_ZH, DRILL_RETRY_ZH } from '../services/coach.js';
+import { compareMeaning, buildRetellBlock, toSimplified, planRetellCoach, RT_GATE_ZH, RETELL_PHRASES_ZH } from '../services/retell.js';
 import { saveMissed, fillGlosses, drillTarget } from '../lib/missed.js';
 import { rateLimit } from '../lib/ratelimit.js';
 import { log } from '../config.js';
@@ -28,7 +29,7 @@ export const needsTranscript = () => true;
 
 const publicCorrection = (c) => ({ kind: c.kind, targetText: c.targetText, explanationZh: c.explanationZh, modelText: c.modelText, factRef: c.factRef, source: c.source,
   ...(c.start !== undefined ? { start: c.start, end: c.end } : {}), ...(c.pinyin ? { pinyin: c.pinyin } : {}), ...(c.meaning !== undefined ? { meaning: c.meaning } : {}),
-  ...(c.heard ? { heard: c.heard } : {}), ...(c.evidence ? { evidence: c.evidence } : {}) });
+  ...(c.heard ? { heard: c.heard } : {}), ...(c.ideaId ? { ideaId: c.ideaId } : {}), ...(c.evidence ? { evidence: c.evidence } : {}) });
 
 export function attemptRouter({ cfg, engine, services, db }) {
   const r = Router();
@@ -131,7 +132,7 @@ export function attemptRouter({ cfg, engine, services, db }) {
     return { unit, done: () => chain };
   }
 
-  const warmTts = (b) => { services.tts.warm?.({ phrases: FIXED_PHRASES_ZH, voice: b.voice, speed: Number(b.speed) || undefined })?.catch?.(() => {}); };
+  const warmTts = (b) => { services.tts.warm?.({ phrases: [...FIXED_PHRASES_ZH, ...RETELL_PHRASES_ZH], voice: b.voice, speed: Number(b.speed) || undefined })?.catch?.(() => {}); };
   const meaningOf = (text) => db.getMissedByText(text)?.meaning ?? null;
 
   /** Word analysis + facts + auto-save. */
@@ -168,20 +169,8 @@ export function attemptRouter({ cfg, engine, services, db }) {
     send('status', { stage: 'uploading', ...label });
     const mime = req.file.mimetype || 'audio/wav';
     let transcript = null; let basis = 'script'; let assessment; let stt = { status: 'not_run' }; let coachText = chunkText;
-    if (assessMode === 'retell') {
-      if (!services.stt.available) return S.terminal('stt_not_configured', 'OPENAI_API_KEY is not set on the server, so retelling cannot be transcribed; no assessment obtained.', false, 'transcribing');
-      send('status', { stage: 'transcribing' });
-      const t = Date.now(); let tr;
-      try { tr = await services.stt.transcribe({ audio, mime, signal: S.ac.signal }); } catch (e) { timings.sttMs = Date.now() - t; if (S.closed) return; return S.terminal(e.code || 'transcription_failed', 'Could not transcribe your retelling; no assessment obtained.', e.retryable !== false, 'transcribing'); }
-      timings.sttMs = Date.now() - t;
-      if (S.closed) return;
-      transcript = tr; const ref = hanzi(transcript);
-      if (!ref) return S.terminal('no_speech_detected', "I couldn't hear Mandarin speech in that recording. Try again.", true, 'transcribing');
-      if ([...ref].length > 100) return S.terminal('retell_too_long', 'That retelling is too long to assess in one go (over 100 characters heard). Retell in shorter pieces.', false, 'transcribing');
-      basis = 'transcript'; coachText = ref;
-      send('status', { stage: 'assessing' });
-      const t2 = Date.now(); assessment = await engine.assess({ audio, mime, chunkText: ref, attemptId, lowConfidence: true }); timings.assessMs = Date.now() - t2;
-    } else {
+    if (assessMode === 'retell') return retellPipeline(S, { b, audio, mime, chunkText, attemptId });
+    {
       const out = await takeAssessment(S, { audio, mime, chunkText, attemptId });
       assessment = out.assessment; transcript = out.transcript; stt = out.stt;
     }
@@ -234,6 +223,73 @@ export function attemptRouter({ cfg, engine, services, db }) {
     if (S.closed) return;
     afterDone();
     send('done', finish({ corrections: result.corrections.map(publicCorrection), summary: { coached: true, praiseZh: result.praiseZh, nextPromptZh: result.nextPromptZh, droppedCorrections: result.dropped.length, llmCalled: result.llmCalled } }));
+  }
+
+
+  // =================================================================== RETELL (free retelling, meaning comparison)
+  // STT (needed first) -> [ meaning-comparison LLM  ||  TonePerfect on the TRANSCRIPT ] -> assessment{retell} -> code-built coaching.
+  // The tone check uses the transcript (hanzi only) as the reference, lowConfidence:true; it is OPTIONAL: skipped when the transcript has digits/latin or
+  // is > 100 hanzi (TonePerfect refuses those), or when TonePerfect fails / times out (RETELL_TONE_WAIT_MS). It is also a cross-check: audio that does not
+  // match its own transcript (gate low_match: noise, STT hallucination) makes the meaning comparison "unavailable" instead of accusing the learner.
+  async function retellPipeline(S, { b, audio, mime, chunkText, attemptId }) {
+    const { send, timings } = S; const label = S.label;
+    if (!services.stt.available) return S.terminal('stt_not_configured', 'OPENAI_API_KEY is not set on the server, so retelling cannot be transcribed; no assessment obtained.', false, 'transcribing');
+    send('status', { stage: 'transcribing' });
+    const t = Date.now(); let transcript;
+    try { transcript = toSimplified(await services.stt.transcribe({ audio, mime, signal: S.ac.signal })); } catch (e) { timings.sttMs = Date.now() - t; if (S.closed) return; return S.terminal(e.code || 'transcription_failed', 'Could not transcribe your retelling; no assessment obtained.', e.retryable !== false, 'transcribing'); }
+    timings.sttMs = Date.now() - t; // `transcript` is normalised to simplified characters (STT sometimes answers in traditional)
+    if (S.closed) return;
+    const ref = hanzi(transcript);
+    if (!ref) return S.terminal('no_speech_detected', "I couldn't hear Mandarin speech in that recording. Try again.", true, 'transcribing');
+    if ([...ref].length > P.RETELL_MAX_TRANSCRIPT_HANZI) return S.terminal('retell_too_long', `That retelling is too long to assess in one go (over ${P.RETELL_MAX_TRANSCRIPT_HANZI} characters heard). Retell in shorter pieces.`, false, 'transcribing');
+
+    send('status', { stage: 'assessing', detail: 'meaning' });
+    const compareP = compareMeaning({ llm: services.llm, chunkText, transcript, signal: S.ac.signal, model: cfg.openai.retellModel, timings, maxMs: P.RETELL_COMPARE_MAX_MS });
+    let toneSkip = null;
+    if (/[A-Za-z0-9]/.test(String(transcript).normalize('NFKC'))) toneSkip = 'transcript_has_digits_or_latin';
+    else if ([...ref].length > 100) toneSkip = 'transcript_too_long_for_tone';
+    const toneStart = Date.now();
+    const toneP = toneSkip ? null : engine.assess({ audio, mime, chunkText: ref, attemptId, lowConfidence: true })
+      .catch((e) => ({ status: 'unavailable', error: { code: 'assessment_unavailable', message: String(e?.message || 'assessment failed').slice(0, 120), retryable: true } }))
+      .finally(() => { timings.assessMs = Date.now() - toneStart; });
+    let cmp = await compareP;
+    if (S.closed) return;
+    let assessment = null; let tone = { status: 'skipped', reason: toneSkip };
+    if (toneP) {
+      const left = Math.max(0, P.RETELL_TONE_WAIT_MS - (Date.now() - toneStart)); const w0 = Date.now(); let h;
+      const out = await Promise.race([toneP, new Promise((res) => { h = setTimeout(() => res('timeout'), left); h.unref?.(); })]); clearTimeout(h);
+      timings.toneWaitMs = Date.now() - w0; // time spent waiting for TonePerfect AFTER the meaning comparison was ready
+      if (S.closed) return;
+      if (out === 'timeout') tone = { status: 'skipped', reason: 'tone_check_timeout' };
+      else if (out?.status !== 'ok') tone = { status: 'skipped', reason: out?.error?.code || 'assessment_unavailable', ...(out?.error?.message ? { message: out.error.message } : {}) };
+      else if (out.gate === 'low_match') { assessment = out; tone = { status: 'skipped', reason: 'low_match' }; cmp = { status: 'unavailable', reason: 'low_match' }; }
+      else { assessment = out; tone = { status: 'ok' }; }
+    }
+    if (cmp.status !== 'ok' && !assessment) {
+      return S.terminal(tone.reason === 'tone_check_timeout' || !toneP ? 'assessment_unavailable' : tone.reason, `No assessment obtained: the meaning comparison was unavailable (${cmp.reason}) and ${toneP ? 'the tone check failed' : 'no tone check was possible'}.`, true, 'assessment');
+    }
+    const gated = assessment?.gate === 'low_match';
+    const toneFacts = assessment && !gated ? deriveFacts(assessment).confirmedToneErrors : [];
+    const retell = buildRetellBlock({ cmp, chunkText, transcript, stt: { status: 'ok' }, tone, meaningOf });
+    const shown = assessment || { status: 'ok', engine: engine.name, mock: !!engine.mock, overall: null, syllables: [], words: [], matchesText: null, gate: null, lowConfidence: true };
+    const facts = { ...(assessment ? deriveFacts(assessment) : { confirmedToneErrors: [], uncertain: [] }), ...emptyWordFacts(), canPraise: retell.canPraise, completeness: 'unknown' };
+    facts.confirmedToneErrors = toneFacts;
+    send('assessment', { ...shown, lowConfidence: true, facts, wordStatus: [], savedMissed: [], basis: 'transcript', referenceText: ref, transcript, transcriptDerived: true, retell });
+    S.markOk();
+
+    const sp = speaker(S, b);
+    const finish = (extra) => { timings.totalMs = Date.now() - S.t0; return { ...extra, timings: { ...timings }, summary: { ...label, basis: 'transcript', transcriptUsed: true, confirmedToneErrors: toneFacts.length, comparisonStatus: retell.comparisonStatus, coveredCount: retell.coveredCount, totalCount: retell.totalCount, canPraise: retell.canPraise, tone: tone.status, ...extra.summary, timings: { ...timings } } }; };
+    if (gated) {
+      send('status', { stage: 'coaching', skipped: true, code: 'low_match', message: assessment.gateMessage || 'The recording does not match what was transcribed.' });
+      sp.unit({ kind: 'gate', text: RT_GATE_ZH });
+      await sp.done(); if (S.closed) return;
+      return send('done', finish({ corrections: [], summary: { coached: false, gate: 'low_match', gatePhraseZh: RT_GATE_ZH } }));
+    }
+    send('status', { stage: 'coaching' });
+    const plan = planRetellCoach({ retell, cmp, chunkText, toneFacts, toneRef: ref });
+    for (const u of plan.units) sp.unit(u);
+    await sp.done(); if (S.closed) return;
+    send('done', finish({ corrections: plan.corrections.map(publicCorrection), summary: { coached: true, llmCalled: cmp.attempts !== undefined || cmp.status === 'ok', droppedIdeas: (cmp.dropped || []).length, compareAttempts: cmp.attempts ?? 0 } }));
   }
 
   // =================================================================== POST /api/drill/attempt

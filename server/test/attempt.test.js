@@ -198,41 +198,7 @@ test('Azure TTS is preferred when keyed (SSML voice + rate); OpenAI speech not c
   } finally { await t.close(); }
 });
 
-test('RETELL: STT first, TonePerfect scored against the TRANSCRIPT, flagged lowConfidence + transcript-derived', async () => {
-  svc.state.sttText = '我，喜欢学中文。'; svc.state.chatScript = llm({ praiseZh: '根据我听到的，说得不错。', corrections: [], nextPromptZh: '再讲一遍。' });
-  const t = await server(envOai());
-  try {
-    const r = await postAttempt(t, { fields: { assessMode: 'retell', practiceMode: 'fading_cues', chunkText: '我爱说中文，每天练习。' } });
-    const [a] = ev(r, 'assessment');
-    assert.equal(a.basis, 'transcript'); assert.equal(a.lowConfidence, true); assert.equal(a.transcriptDerived, true);
-    assert.equal(a.transcript, '我，喜欢学中文。'); assert.equal(a.referenceText, '我喜欢学中文');
-    assert.equal(tp.requests.at(-1).fields.text, '我喜欢学中文');
-    assert.ok(names(r).indexOf('status') < names(r).indexOf('assessment'));
-    assert.deepEqual(ev(r, 'status').map((s) => s.stage).filter((s) => ['transcribing', 'assessing'].includes(s)), ['transcribing', 'assessing']);
-    const chat = JSON.parse(svc.state.requests.find((x) => x.url === '/v1/chat/completions').json.messages[1].content);
-    assert.equal(chat.basis, 'transcript'); assert.equal(chat.lowConfidence, true); assert.equal(chat.chunkText, '我爱说中文，每天练习。');
-    assert.equal(ev(r, 'done')[0].corrections.length, 0);
-  } finally { await t.close(); }
-});
-
-test('RETELL error paths: no STT key, empty transcript, too long, STT failure => terminal error, no assessment, no coaching', async () => {
-  let t = await server(envBase());
-  try {
-    const r = await postAttempt(t, { fields: { assessMode: 'retell' } });
-    assert.equal(ev(r, 'error')[0].code, 'stt_not_configured'); assert.equal(tp.requests.length, 0);
-  } finally { await t.close(); }
-  t = await server(envOai());
-  try {
-    svc.state.sttText = 'um...';
-    assert.equal(ev(await postAttempt(t, { fields: { assessMode: 'retell' } }), 'error')[0].code, 'no_speech_detected');
-    svc.state.sttText = '好'.repeat(101);
-    assert.equal(ev(await postAttempt(t, { fields: { assessMode: 'retell' } }), 'error')[0].code, 'retell_too_long');
-    svc.state.sttStatus = 500; svc.state.sttText = '你好';
-    const r = await postAttempt(t, { fields: { assessMode: 'retell' } });
-    assert.equal(ev(r, 'error')[0].stage, 'transcribing'); assert.equal(ev(r, 'assessment').length, 0);
-    assert.equal(tp.requests.length, 0); assert.equal(chatCalls(), 0);
-  } finally { await t.close(); }
-});
+// RETELL tests live in retell.test.js (natural retelling: meaning comparison).
 
 test('CLOSE: STT ALWAYS runs alongside the assessment (listen_repeat too); transcript labelled; STT failure/timeout is non-fatal and stated in facts', async () => {
   svc.state.chatScript = llm({ praiseZh: '好。', corrections: [], nextPromptZh: '继续。' });

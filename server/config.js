@@ -45,6 +45,10 @@ export const ASSESSMENT_POLICY = Object.freeze({
   // /api/attempt starts STT in parallel with the assessment engine and waits for it at most this long (ms) after the
   // assessment is ready; on timeout the take is assessed acoustically only and facts.stt says so.
   STT_WAIT_MS: 3000,
+  // ---- natural RETELL mode (services/retell.js)
+  RETELL_TONE_WAIT_MS: 3000,        // how long to wait for the (optional) TonePerfect check of the transcript; later => tone skipped ("timeout")
+  RETELL_COMPARE_MAX_MS: 9000,      // wall-clock cap of the meaning-comparison LLM call incl. its one retry; later => comparisonStatus "unavailable"
+  RETELL_MAX_TRANSCRIPT_HANZI: 300, // longer retellings are refused (retell_too_long); the tone check additionally needs <= 100 hanzi (TonePerfect limit)
   // A silent gap between consecutive syllables longer than this (ms) does not claim an error but blocks plain praise.
   // Data: genuine takes had gaps up to 625 ms (clip 05) so this only withholds praise, it never flags a word.
   LONG_PAUSE_MS: 500,
@@ -117,6 +121,7 @@ export function loadConfig(env = process.env) {
       apiKey: has(env.OPENAI_API_KEY) ? env.OPENAI_API_KEY.trim() : null,
       baseUrl: (env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, ''),
       coachModel: env.COACH_MODEL || 'gpt-4.1-mini',
+      retellModel: env.RETELL_MODEL || env.COACH_MODEL || 'gpt-4.1-mini',
       sttModel: env.STT_MODEL || 'gpt-4o-transcribe',
       ttsModel: env.OPENAI_TTS_MODEL || 'gpt-4o-mini-tts',
     },

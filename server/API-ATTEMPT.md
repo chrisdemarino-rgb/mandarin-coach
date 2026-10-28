@@ -16,7 +16,7 @@ Validation failures are plain JSON `400 {error:{code,message}}` BEFORE the strea
 ## Events (`event: <name>\ndata: <json>\n\n`)
 ```
 event: status      data: {"stage":"uploading","engine":"toneperfect","mock":false}
-event: status      data: {"stage":"assessing"}            (retell: {"stage":"transcribing"} first; also "coaching","speaking")
+event: status      data: {"stage":"assessing"}            (retell: {"stage":"transcribing"} first, then {"stage":"assessing","detail":"meaning"}; also "coaching","speaking")
 event: assessment  data: {"engine":"toneperfect","mock":false,"modelVersion":"…","status":"ok","overall":71.2,
                           "scores":{"overall":71.2,"pronunciation":70.1,"initial":90.2,"final":80.3,"tone":48.5},
                           "syllables":[{"index":1,"char":"谢","pinyin":"xie4","wordIndex":1,"startMs":200,"endMs":420,
@@ -33,7 +33,7 @@ event: assessment  data: {"engine":"toneperfect","mock":false,"modelVersion":"�
                                    "demoted":[{"ref":"tone:0","reason":"score_above_threshold","score":75.6}, …],"thresholds":{…}}.
                     Demoted tone flags arrive with syllables[i].tone = {decision:"uncertain", heard:null, demotedFrom:"review", demotedReason}; facts.uncertain
                     items never carry `heard`. ONLY facts.confirmedToneErrors may be shown as "you said tone X" (<= 2, lowest tone score first).
-                    (+ "transcript","transcriptDerived":true when STT ran; retell => "basis":"transcript","lowConfidence":true)
+                    (+ "transcript","transcriptDerived":true when STT ran; retell => "basis":"transcript","lowConfidence":true and a `retell` block, see "Retell mode")
 event: status      data: {"stage":"coaching"}
 event: coach_text  data: {"delta":"很好，发音很清楚。","index":0,"role":"praise"}      roles: opener|praise|correction|correction_model|caveat|next|gate (see "Word-level feedback" below)
 event: coach_text  data: {"delta":"第二个“谢”应该读第四声，你读成了第二声。","index":1,"role":"correction"}
@@ -51,7 +51,7 @@ Skips (stream continues, assessment still delivered): `{"stage":"coaching","skip
 ```
 event: error  data: {"code":"no_speech","message":"No assessment obtained: …","retryable":true,"canSkip":true,"stage":"assessment","engine":"toneperfect","mock":false}
 ```
-Codes: engine codes (`no_speech`, `no_audio`, `different_content`, `not_configured`, `rate_limit`, `engine_unavailable`, …), `stt_not_configured`, `no_speech_detected`, `retell_too_long` (retell transcript > 100 hanzi), `invalid_reference`. Retry = re-POST with the SAME `attemptId` (failed attempts re-run; successful ones replay the recorded events with header `X-Attempt-Replayed: true` for 10 min, without spending credits again).
+Codes: engine codes (`no_speech`, `no_audio`, `different_content`, `not_configured`, `rate_limit`, `engine_unavailable`, …), `stt_not_configured`, `no_speech_detected`, `retell_too_long` (retell transcript > 300 hanzi), `transcription_failed`, `invalid_reference`. Retry = re-POST with the SAME `attemptId` (failed attempts re-run; successful ones replay the recorded events with header `X-Attempt-Replayed: true` for 10 min, without spending credits again).
 
 ## Other endpoints
 - `POST /api/tts {text<=500, voice?, speed?}` -> `audio/mpeg` (Range supported; `X-TTS-Cache: hit|miss`, `X-TTS-Provider`); 501 `tts_not_configured`.
@@ -162,3 +162,48 @@ event: done        data: {"correct":true,"counted":true,"correctStreak":1,"neede
                           "timings":{"receiveMs":1,"transcodeMs":0,"assessMs":1,"sttMs":2,"sttWaitMs":1,"analysisMs":1,"firstCoachTextMs":4,"firstAudioMs":4,"ttsFirstAudioMs":0,"ttsFirstCached":true,"totalMs":4}}
 ```
 `counted:false` (+ `"reason":"low_match"`) when the take did not match the text (nothing changes). A miss resets `correctStreak` to 0 (and counts as a miss in `missCount`); the 3rd consecutive correct take sets `graduated:true`, `correctStreak:3`, status → `known` (spoken line `这个词你学会了！`), and the word leaves `/api/drill/next`. Drill attempts never auto-save new words (`savedMissed:[]`).
+
+
+## Retell mode (`assessMode:"retell"`): the learner retells `chunkText` freely, in their own words
+Pipeline: **STT** (gpt-4o-transcribe, zh, the reference is NEVER in the STT prompt; transcript normalised to *simplified* characters) -> in parallel **(a) meaning comparison LLM** (`RETELL_MODEL`, JSON mode, temperature 0, 9 s cap, 1 retry) and **(b) TonePerfect on the transcript** (see "Tone in retell") -> `assessment` (waits for both; TonePerfect is waited for at most 3 s after the comparison is ready) -> code-built coaching.
+The LLM sees ONLY `{reference, transcript}`. It proposes key ideas as `{refQuote (substring of the reference), covered, evidence (substring of the transcript), confidence}`; **CODE** resolves `refQuote` to code-point offsets (exact -> punctuation-insensitive -> fuzzy <= 25% edits; LLM-given numbers are never used; unresolvable spans are dropped), verifies every `evidence` quote against the transcript (pinyin-level, so trad/simp STT output is fine; a covered/partial idea with unverifiable evidence is demoted to `partial` + `confidence:"low"`, `evidence:null`), de-duplicates overlapping spans, renumbers `i1..` by position, and computes `coveredCount/totalCount/canPraise/missingIdeaIds`. Strict schema check; on malformed JSON it retries once, then `comparisonStatus:"unavailable"` with **no coverage claims**.
+Wording changes are NOT errors: **`wordStatus` is `[]` and no missed/substituted words are computed or auto-saved in retell** (`savedMissed:[]`, `facts.missingWords:[]`). Nothing is persisted: no audio, no transcript (the transcript is returned to the client only).
+
+`assessment` event, retell additions (everything else as in close mode; `basis:"transcript"`, `transcriptDerived:true`, `lowConfidence:true`, `referenceText` = hanzi of the transcript, `facts.canPraise` = `retell.canPraise`):
+```
+"transcript":"小明早上起床，吃了早饭，骑自行车去学校。他在学校学习数学和英语。",
+"wordStatus":[],"savedMissed":[],
+"retell":{
+  "transcript":"小明早上起床，吃了早饭，骑自行车去学校。他在学校学习数学和英语。",   // same text as above (simplified chars), for display
+  "sttStatus":"ok",
+  "ideas":[
+    {"id":"i1","textZh":"小明早上起床","refStart":0,"refEnd":6,"covered":true,"evidence":"小明早上起床","confidence":"high"},
+    {"id":"i2","textZh":"吃了早饭","refStart":7,"refEnd":11,"covered":true,"evidence":"吃了早饭","confidence":"high"},
+    {"id":"i3","textZh":"骑自行车去学校","refStart":12,"refEnd":19,"covered":true,"evidence":"骑自行车去学校","confidence":"high"},
+    {"id":"i4","textZh":"他在学校学习数学和英语","refStart":20,"refEnd":31,"covered":true,"evidence":"他在学校学习数学和英语","confidence":"high"},
+    {"id":"i5","textZh":"下午回家踢足球","refStart":32,"refEnd":39,"covered":false,"evidence":null,"confidence":"high"}],
+  "coveredCount":4,"totalCount":5,"partialCount":0,
+  "canPraise":false,                       // true ONLY when every idea is covered:true with non-low confidence
+  "praiseLevel":"none",                    // "full" | "soft" (partial / low-confidence only) | "none" (any covered:false)
+  "comparisonStatus":"ok",                 // "ok" | "unavailable" (then ideas:[], counts 0, canPraise:false, comparisonReason:"malformed_output"|"unusable_output"|"low_match"|"llm_not_configured"|<error code>)
+  "missingIdeaIds":["i5"],
+  "suggestedWords":[{"text":"下午","pinyin":"xià wǔ","meaning":null,"ideaId":"i5"},{"text":"回家","pinyin":"huí jiā","meaning":null,"ideaId":"i5"},{"text":"足球","pinyin":"zú qiú","meaning":null,"ideaId":"i5"}],   // optional "Save word" candidates (<= 4); NOT saved by the server
+  "tone":{"status":"ok"}                   // or {"status":"skipped","reason":"transcript_has_digits_or_latin"|"transcript_too_long_for_tone"|"tone_check_timeout"|<TonePerfect error code>}
+}
+```
+`refStart/refEnd` are **code-point offsets, end exclusive, into the exact `chunkText` sent** (`Array.from(chunkText).slice(refStart, refEnd)` = the idea's span; highlight it in the reference). `textZh` is the reference wording of the idea (<= 30 chars, never invented). `covered:"partial"` shows as "partly said". An idea with `confidence:"low"` is never counted as fully covered.
+
+`coach_text` roles in retell (all lines are code-built from fixed phrases, except `summary` (LLM, only on full praise, validated) and tone lines; first audio comes from the pre-warmed TTS cache):
+- all covered: `praise` ("意思都讲到了，很好。"), `summary` (optional), `next`.
+- something missing: `opener` ("有一个意思没讲到。" / "有N个意思没讲到。"; "有些地方的意思和原文不一样。" when every non-covered idea is a wrong meaning), then <= 2 of `correction` (`caption` = idea `textZh`, `start/end` = offsets; "漏掉了这个意思：…" for missing, short explanation for `wrong_meaning`/`language`) each followed by `correction_model` ("可以这样说：" + reference wording), then `next`. Order: wrong_meaning > missing > language > partial; tone only fills a leftover slot.
+- partial/low-confidence only: `opener` "大部分意思都讲到了。" (soft praise only), partial corrections.
+- `comparisonStatus:"unavailable"`: `opener` "这次没能比较意思。" + `next` ("再讲一遍吧。"); no claim about coverage. When the transcript does not match the TonePerfect check (`gate:"low_match"`: noise, a different sentence) the only line is `gate` "我没有听清楚，请再讲一遍。" (status `coaching` skipped, code `low_match`), with `comparisonReason:"low_match"`.
+`done.corrections[]` carry `ideaId`; `done.summary` has `comparisonStatus, coveredCount, totalCount, canPraise, tone, droppedIdeas, compareAttempts`. `done.timings` adds `sttMs`, `compareMs` (LLM only), `assessMs` (TonePerfect, in parallel), `toneWaitMs` (extra wait for TonePerfect after the comparison was ready), plus `firstCoachTextMs`, `firstAudioMs`, `totalMs`.
+
+Errors (terminal, no coaching): `stt_not_configured`, `transcription_failed`, `no_speech_detected` (stage `transcribing`), `retell_too_long` (> 300 hanzi). If BOTH the comparison and the tone check fail the stream ends with an `error` at stage `assessment`. If only the comparison fails the assessment is still sent (`comparisonStatus:"unavailable"`) with a tone result.
+
+### Tone in retell (decision)
+The acoustic reference is the **transcript** (hanzi only, simplified), `lowConfidence:true`, existing tone policy (<= 2 confirmed claims, score threshold, density limit) unchanged. Consequences, documented on purpose: `assessment.syllables[]/words[]/facts.confirmedToneErrors` refer to `referenceText` (the learner's own words), NOT to `chunkText`; a tone line is a hedged, code-built sentence ("按我听到的词，“X”应该读第N声，我听到的是第M声。") modelled on the learner's own word, and only appears after meaning feedback (it never replaces it and never accompanies praise from the LLM). **The transcript is never used to make a tone claim** - tone claims come only from TonePerfect facts. TonePerfect is skipped (`retell.tone.status:"skipped"` + reason, no claim) when the transcript has digits/latin letters, > 100 hanzi, or TonePerfect fails/times out (3 s); the meaning feedback is delivered anyway.
+
+### Validation of LLM text (retell)
+`wrong_meaning`/`language` corrections must quote the transcript (verified); `wrong_meaning` needs a non-covered idea; explanations containing tone talk or praise are replaced by a fixed line (`source:"server_fact"`); `modelText` must be grounded (<= 15% characters not in the reference/function words, no latin/digits, no tone talk) else the reference span is used instead; the LLM `summary` is spoken only when `canPraise` and contains no negative words.

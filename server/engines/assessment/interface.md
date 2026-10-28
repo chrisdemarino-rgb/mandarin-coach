@@ -40,7 +40,7 @@ with `error.code` = the vendor reason (e.g. `no_speech`, `different_content`), n
 - `assess` result `status:'unavailable'` => SSE `error` event, coaching never starts (the LLM is not called).
 - The LLM receives ONLY: chunk text, `facts` (above), mode/basis, transcript. Never raw vendor data or scores.
 - Coach output is post-validated in `services/coach.js`: a `tone` correction must cite a `factRef` equal to a `confirmedToneErrors` ref, else it is rewritten to a "not sure" line or dropped; stated tone numbers must match the fact; `uncertain`/`no_correction` are never stated as errors; max 2 corrections.
-- Retell (and close + fading_cues): STT transcript. In retell the transcript (hanzi only) is the assessment reference and the result is labelled `basis:'transcript'`, `lowConfidence:true`.
+- Retell (and close + fading_cues): STT transcript. In retell the transcript (hanzi only, normalised to simplified; skipped when it has digits/latin or > 100 hanzi) is the assessment reference and the result is labelled `basis:'transcript'`, `lowConfidence:true`; syllables/words/`confirmedToneErrors` therefore refer to the learner's own words, not to `chunkText`. The engine runs in parallel with the LLM meaning comparison (`services/retell.js`); `wordStatus` is not computed in retell and a `low_match` gate on the transcript makes the meaning comparison `unavailable`.
 - Real-data caveat: with synthetic speech the engine returned `no_correction` for every deliberate tone mismatch (see `test-results/VALIDATION.md`); the `review` threshold is unproven until real recordings are scored.
 
 ## Policy layer (`policy.js`, applied to ANY engine after normalization; constants in `config.js` `ASSESSMENT_POLICY`)

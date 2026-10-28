@@ -13,10 +13,11 @@ import { Router } from 'express';
 import multer from 'multer';
 import { deriveFacts } from '../engines/assessment/index.js';
 import { analyzeWords, emptyWordFacts } from '../engines/assessment/words.js';
-import { runCoach, splitSentences, hanzi, wordCorrection, planCorrections, factCorrection, GATE_PHRASE_ZH, FIXED_PHRASES_ZH, DRILL_OK_ZH, DRILL_RETRY_ZH } from '../services/coach.js';
+import { runCoach, splitSentences, hanzi, wordCorrection, modelWindow, planCorrections, factCorrection, GATE_PHRASE_ZH, FIXED_PHRASES_ZH, DRILL_OK_ZH, DRILL_RETRY_ZH } from '../services/coach.js';
 import { compareMeaning, buildRetellBlock, toSimplified, planRetellCoach, RT_GATE_ZH, RETELL_PHRASES_ZH } from '../services/retell.js';
 import { QA_PHRASES_ZH } from '../services/qa.js';
 import { qaRoutes } from './qa.js';
+import { reuseFindings, reuseWordStatus, reuseFacts, reuseCorrections } from '../services/reuse.js';
 import { saveMissed, fillGlosses, drillTarget } from '../lib/missed.js';
 import { rateLimit } from '../lib/ratelimit.js';
 import { log } from '../config.js';
@@ -272,15 +273,21 @@ export function attemptRouter({ cfg, engine, services, db }) {
     }
     const gated = assessment?.gate === 'low_match';
     const toneFacts = assessment && !gated ? deriveFacts(assessment).confirmedToneErrors : [];
-    const retell = buildRetellBlock({ cmp, chunkText, transcript, stt: { status: 'ok' }, tone, meaningOf });
+    // reused-phrase word check (CODE): a substituted/omitted script word inside a near-verbatim reuse blocks praise, is named, saved and shown in wordStatus
+    const reuse = gated ? { findings: [], inserted: [] } : reuseFindings({ units: [{ text: chunkText }], transcript: ref, policy: P });
+    const wordFindings = reuse.findings;
+    const wordCorrections = reuseCorrections(wordFindings, { meaningOf, modelOf: (f) => modelWindow(chunkText, f) });
+    const savedMissed = wordFindings.length ? saveMissed(db, reuseFacts(wordFindings), chunkText, P) : [];
+    const retell = buildRetellBlock({ cmp, chunkText, transcript, stt: { status: 'ok' }, tone, meaningOf, wordFindings });
     const shown = assessment || { status: 'ok', engine: engine.name, mock: !!engine.mock, overall: null, syllables: [], words: [], matchesText: null, gate: null, lowConfidence: true };
-    const facts = { ...(assessment ? deriveFacts(assessment) : { confirmedToneErrors: [], uncertain: [] }), ...emptyWordFacts(), canPraise: retell.canPraise, completeness: 'unknown' };
+    const facts = { ...(assessment ? deriveFacts(assessment) : { confirmedToneErrors: [], uncertain: [] }), ...emptyWordFacts(), ...reuseFacts(wordFindings), canPraise: retell.canPraise, completeness: wordFindings.length ? 'incomplete' : 'unknown',
+      reusedPhrase: { findings: wordFindings.length, inserted: reuse.inserted } };
     facts.confirmedToneErrors = toneFacts;
-    send('assessment', { ...shown, lowConfidence: true, facts, wordStatus: [], savedMissed: [], basis: 'transcript', referenceText: ref, transcript, transcriptDerived: true, retell });
+    send('assessment', { ...shown, lowConfidence: true, facts, wordStatus: reuseWordStatus(wordFindings), savedMissed, basis: 'transcript', referenceText: ref, transcript, transcriptDerived: true, retell });
     S.markOk();
 
     const sp = speaker(S, b);
-    const finish = (extra) => { timings.totalMs = Date.now() - S.t0; return { ...extra, timings: { ...timings }, summary: { ...label, basis: 'transcript', transcriptUsed: true, confirmedToneErrors: toneFacts.length, comparisonStatus: retell.comparisonStatus, coveredCount: retell.coveredCount, totalCount: retell.totalCount, canPraise: retell.canPraise, tone: tone.status, ...extra.summary, timings: { ...timings } } }; };
+    const finish = (extra) => { timings.totalMs = Date.now() - S.t0; return { ...extra, timings: { ...timings }, summary: { ...label, basis: 'transcript', transcriptUsed: true, confirmedToneErrors: toneFacts.length, wordFindings: wordFindings.length, comparisonStatus: retell.comparisonStatus, coveredCount: retell.coveredCount, totalCount: retell.totalCount, canPraise: retell.canPraise, tone: tone.status, ...extra.summary, timings: { ...timings } } }; };
     if (gated) {
       send('status', { stage: 'coaching', skipped: true, code: 'low_match', message: assessment.gateMessage || 'The recording does not match what was transcribed.' });
       sp.unit({ kind: 'gate', text: RT_GATE_ZH });
@@ -288,9 +295,10 @@ export function attemptRouter({ cfg, engine, services, db }) {
       return send('done', finish({ corrections: [], summary: { coached: false, gate: 'low_match', gatePhraseZh: RT_GATE_ZH } }));
     }
     send('status', { stage: 'coaching' });
-    const plan = planRetellCoach({ retell, cmp, chunkText, toneFacts, toneRef: ref });
+    const plan = planRetellCoach({ retell, cmp, chunkText, toneFacts, toneRef: ref, wordCorrections });
     for (const u of plan.units) sp.unit(u);
     await sp.done(); if (S.closed) return;
+    if (savedMissed.length) fillGlosses(db, services.llm, savedMissed.map((x) => x.id)).catch(() => {});
     send('done', finish({ corrections: plan.corrections.map(publicCorrection), summary: { coached: true, llmCalled: cmp.attempts !== undefined || cmp.status === 'ok', droppedIdeas: (cmp.dropped || []).length, compareAttempts: cmp.attempts ?? 0 } }));
   }
 

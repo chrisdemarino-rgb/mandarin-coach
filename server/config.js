@@ -54,6 +54,15 @@ export const ASSESSMENT_POLICY = Object.freeze({
   QA_CHECK_MAX_MS: 8000,            // wall-clock cap of the answer-check LLM call incl. its one retry => comparisonStatus "unavailable"
   QA_TONE_WAIT_MS: 3000,            // optional TonePerfect check of the answer transcript (same policy as retell); later => tone skipped
   QA_MAX_TRANSCRIPT_HANZI: 300,     // longer answers are refused (qa_answer_too_long)
+  // ---- reused-phrase word check (services/reuse.js; retell + Q&A). A stretch of the transcript that is a NEAR-VERBATIM reuse of a script
+  //      phrase is compared word by word (pinyin-level local alignment); a substituted/omitted script word inside it blocks praise.
+  //      Paraphrases (low overlap) are never flagged. See test/reuse.test.js for the paraphrase vs near-verbatim matrix.
+  REUSE_MIN_RUN: 4,                 // the aligned region needs a verbatim run (identical or homophone chars) of at least this many script characters
+  REUSE_MIN_MATCHED: 5,             // ... and at least this many matched characters in total
+  REUSE_MIN_RATIO: 0.6,             // ... and matched / max(script span, heard content chars) >= this (function chars like 的/了 are not counted against it)
+  REUSE_FLANK_MIN: 2,               // confidence 'high' needs a matching run of >= this many chars on BOTH sides of the differing words (else 'medium')
+  REUSE_MAX_BLOCK: 6,               // a differing script block longer than this many characters is a rewrite, not a word slip: not flagged
+  REUSE_MAX_FINDINGS: 3,            // at most this many word findings per attempt (the coach names at most 2)
   // A silent gap between consecutive syllables longer than this (ms) does not claim an error but blocks plain praise.
   // Data: genuine takes had gaps up to 625 ms (clip 05) so this only withholds praise, it never flags a word.
   LONG_PAUSE_MS: 500,

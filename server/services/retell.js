@@ -34,13 +34,14 @@ export const RT_ALL_ZH = '意思都讲到了，很好。';
 export const RT_ALL_TONE_ZH = '意思都讲到了，有一个发音可以再练一练。';
 export const RT_SOFT_ZH = '大部分意思都讲到了。';
 export const RT_WRONG_ZH = '有些地方的意思和原文不一样。';
+export const RT_WORD_ZH = '有个词和原文不一样。';   // reused-phrase word check found a substituted/omitted script word: neutral, never praise
 export const RT_GATE_ZH = '我没有听清楚，请再讲一遍。';
 export const RT_UNAVAILABLE_ZH = '这次没能比较意思。';
 export const RT_UNAVAILABLE_NEXT_ZH = '再讲一遍吧。';
 export const RT_NEXT_OK_ZH = '我们继续下一段。';
 export const RT_NEXT_RETRY_ZH = '再讲一遍吧。';
 export const rtMissingOpener = (n) => `有${n === 1 ? '一' : ZH_N[Math.min(n, 8)]}个意思没讲到。`;
-export const RETELL_PHRASES_ZH = [RT_GATE_ZH, RT_ALL_ZH, RT_ALL_TONE_ZH, RT_SOFT_ZH, RT_WRONG_ZH, RT_UNAVAILABLE_ZH, RT_NEXT_OK_ZH, RT_NEXT_RETRY_ZH, ...[1, 2, 3, 4, 5].map(rtMissingOpener)];
+export const RETELL_PHRASES_ZH = [RT_GATE_ZH, RT_ALL_ZH, RT_ALL_TONE_ZH, RT_SOFT_ZH, RT_WRONG_ZH, RT_WORD_ZH, RT_UNAVAILABLE_ZH, RT_NEXT_OK_ZH, RT_NEXT_RETRY_ZH, ...[1, 2, 3, 4, 5].map(rtMissingOpener)];
 
 // ---------------------------------------------------------------------------------------------------------------- matching helpers
 /** Semi-global edit-distance search of `needle` inside `hay` (arrays of tokens). Returns {start,end,dist} (end exclusive) with the lowest distance. */
@@ -233,28 +234,39 @@ export function suggestWords(ideas, chunkText, transcript, meaningOf = () => nul
   return out;
 }
 
-/** The public `retell` block (everything derived by code). `cmp` is compareMeaning()'s result. */
-export function buildRetellBlock({ cmp, chunkText, transcript, stt, tone, meaningOf }) {
+/** Script words found by the reused-phrase word check (services/reuse.js) first (they are words the learner cannot say yet), then the vocabulary of uncovered ideas. */
+export function wordSuggestions(findings, rest, meaningOf = () => null, owner = {}) {
+  const out = [];
+  for (const f of findings) if (!out.some((o) => o.text === f.text)) out.push({ text: f.text, pinyin: f.pinyin, meaning: meaningOf(f.text) ?? null, ...owner(f), reason: f.kind === 'missed' ? 'omitted' : 'substituted' });
+  for (const w of rest) if (!out.some((o) => o.text === w.text)) out.push(w);
+  return out;
+}
+
+/** The public `retell` block (everything derived by code). `cmp` is compareMeaning()'s result. `wordFindings` = reused-phrase word check results: they cap praise at 'soft'. */
+export function buildRetellBlock({ cmp, chunkText, transcript, stt, tone, meaningOf, wordFindings = [] }) {
   const base = { transcript, sttStatus: stt?.status ?? 'ok', tone };
-  if (cmp.status !== 'ok') return { ...base, ideas: [], coveredCount: 0, totalCount: 0, canPraise: false, praiseLevel: 'none', comparisonStatus: 'unavailable', comparisonReason: cmp.reason, missingIdeaIds: [], suggestedWords: [] };
+  const ideaOf = (f) => ({ ideaId: cmp.ideas?.find((x) => f.start >= x.refStart && f.start < x.refEnd)?.id ?? null });
+  if (cmp.status !== 'ok') return { ...base, ideas: [], coveredCount: 0, totalCount: 0, canPraise: false, praiseLevel: 'none', comparisonStatus: 'unavailable', comparisonReason: cmp.reason, missingIdeaIds: [], suggestedWords: wordSuggestions(wordFindings, [], meaningOf, ideaOf), ...(wordFindings.length ? { praiseBlockedBy: ['word_check'] } : {}) };
   const ideas = cmp.ideas.map(({ id, textZh, refStart, refEnd, covered, evidence, confidence, issue }) => ({ id, textZh, refStart, refEnd, covered, evidence, confidence, ...(issue ? { issue } : {}) }));
   const coveredCount = ideas.filter((x) => x.covered === true).length;
   const missing = ideas.filter((x) => x.covered === false);
   const allTrue = coveredCount === ideas.length && ideas.every((x) => x.confidence !== 'low');
-  const praiseLevel = allTrue ? 'full' : missing.length ? 'none' : 'soft'; // partial / low-confidence => soft praise only
+  const praiseLevel = allTrue && !wordFindings.length ? 'full' : missing.length ? 'none' : 'soft'; // partial / low-confidence / a substituted script word => soft at most
   return { ...base, ideas, coveredCount, totalCount: ideas.length, partialCount: ideas.filter((x) => x.covered === 'partial').length, canPraise: praiseLevel === 'full', praiseLevel,
-    comparisonStatus: 'ok', missingIdeaIds: missing.map((x) => x.id), suggestedWords: suggestWords(cmp.ideas, chunkText, transcript, meaningOf) };
+    comparisonStatus: 'ok', missingIdeaIds: missing.map((x) => x.id), suggestedWords: wordSuggestions(wordFindings, suggestWords(cmp.ideas, chunkText, transcript, meaningOf), meaningOf, ideaOf),
+    ...(wordFindings.length ? { praiseBlockedBy: allTrue ? ['word_check'] : [], wordCheck: { status: 'found', count: wordFindings.length } } : {}) };
 }
 
 /**
  * Build the spoken/written coaching units (ALL code, from validated facts). Returns { units:[{kind,text,correction?}], corrections:[...] }.
  * Order: opener (counts) -> meaning corrections (wrong_meaning / missing idea / language / partial; max 2 incl. tone) -> tone (only if slots remain) -> optional summary -> next.
  */
-export function planRetellCoach({ retell, cmp, chunkText, toneFacts = [], toneRef = '' }) {
+export function planRetellCoach({ retell, cmp, chunkText, toneFacts = [], toneRef = '', wordCorrections = [] }) {
   const units = []; const corrections = []; const say = (kind, text, correction) => units.push({ kind, text, ...(correction ? { correction } : {}) });
   if (retell.comparisonStatus !== 'ok') {
     say('opener', RT_UNAVAILABLE_ZH);
-    for (const f of toneFacts.slice(0, 1)) { const c = toneCorrection(f, toneRef); corrections.push(c); say('correction', c.explanationZh, c); say('correction_model', `应该这样说：${c.modelText}`, c); }
+    for (const c of wordCorrections.slice(0, MAX_RETELL_CORRECTIONS)) { corrections.push(c); say('correction', c.explanationZh, c); say('correction_model', `应该这样说：${c.modelText}`, c); }
+    for (const f of toneFacts.slice(0, Math.min(1, MAX_RETELL_CORRECTIONS - corrections.length))) { const c = toneCorrection(f, toneRef); corrections.push(c); say('correction', c.explanationZh, c); say('correction_model', `应该这样说：${c.modelText}`, c); }
     say('next', RT_UNAVAILABLE_NEXT_ZH);
     return { units, corrections };
   }
@@ -267,16 +279,17 @@ export function planRetellCoach({ retell, cmp, chunkText, toneFacts = [], toneRe
   for (const lc of cmp.llmCorrections.filter((x) => x.kind === 'language')) cands.push({ kind: 'language', targetText: lc.quote, explanationZh: lc.explanationZh, modelText: lc.modelText, factRef: lc.ideaId ? `idea:${lc.ideaId}` : null, source: lc.rewritten ? 'server_fact' : 'llm', ...(lc.ideaId ? { ideaId: lc.ideaId } : {}), heard: lc.quote });
   for (const idea of cmp.ideas.filter((x) => x.covered === 'partial' && x.confidence !== 'low')) cands.push(ideaCorrection('missing_idea', idea, chunkText, { modelText: modelFor(idea, modelOf(idea.id)) }, true));
   const seen = new Set(); const meaning = [];
-  for (const c of cands) { const key = c.ideaId ? `${c.ideaId}` : `q:${c.targetText}`; if (seen.has(key)) continue; seen.add(key); if (meaning.length < MAX_RETELL_CORRECTIONS) meaning.push(c); }
-  const slots = MAX_RETELL_CORRECTIONS - meaning.length;
+  const words = wordCorrections.slice(0, MAX_RETELL_CORRECTIONS);   // a substituted/omitted SCRIPT word in a reused phrase ranks first
+  for (const c of cands) { const key = c.ideaId ? `${c.ideaId}` : `q:${c.targetText}`; if (seen.has(key)) continue; seen.add(key); if (words.length + meaning.length < MAX_RETELL_CORRECTIONS) meaning.push(c); }
+  const slots = MAX_RETELL_CORRECTIONS - words.length - meaning.length;
   const tones = toneFacts.slice(0, slots).map((f) => toneCorrection(f, toneRef));
 
   const missingN = retell.missingIdeaIds.length; const anyWrong = cmp.ideas.some((x) => x.issue === 'wrong_meaning');
   const hasTone = toneFacts.length > 0;
   if (retell.praiseLevel === 'full') { if (hasTone) say('opener', RT_ALL_TONE_ZH); else say('praise', RT_ALL_ZH); }
-  else if (retell.praiseLevel === 'soft') say('opener', RT_SOFT_ZH);
+  else if (retell.praiseLevel === 'soft') say('opener', words.length ? RT_WORD_ZH : RT_SOFT_ZH);
   else say('opener', anyWrong && missingN === cmp.ideas.filter((x) => x.issue === 'wrong_meaning').length ? RT_WRONG_ZH : rtMissingOpener(missingN));
-  for (const c of [...meaning, ...tones]) { corrections.push(c); say('correction', c.explanationZh, c); if (c.modelText) say('correction_model', `${c.kind === 'tone' ? '应该这样说' : '可以这样说'}：${c.modelText}`, c); }
+  for (const c of [...words, ...meaning, ...tones]) { corrections.push(c); say('correction', c.explanationZh, c); if (c.modelText) say('correction_model', `${['tone', 'substituted', 'missing'].includes(c.kind) ? '应该这样说' : '可以这样说'}：${c.modelText}`, c); }
   // the LLM's one-sentence summary is spoken only when everything is covered (validated: no tone talk, no negatives)
   if (retell.praiseLevel === 'full' && cmp.summaryZh && !/没|漏|错|不对|但|不过|可是/.test(cmp.summaryZh)) say('summary', cmp.summaryZh);
   say('next', retell.praiseLevel === 'full' ? RT_NEXT_OK_ZH : RT_NEXT_RETRY_ZH);

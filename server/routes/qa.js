@@ -3,7 +3,9 @@
 import multer from 'multer';
 import { deriveFacts } from '../engines/assessment/index.js';
 import { emptyWordFacts } from '../engines/assessment/words.js';
-import { hanzi } from '../services/coach.js';
+import { hanzi, modelWindow } from '../services/coach.js';
+import { reuseFindings, reuseWordStatus, reuseFacts, reuseCorrections } from '../services/reuse.js';
+import { saveMissed, fillGlosses } from '../lib/missed.js';
 import { toSimplified } from '../services/retell.js';
 import { generateQuestion, checkAnswer, buildQaBlock, planQaCoach, hintFor, questionPinyin, suggestQaWords, QA_GATE_ZH, QA_MIN_CHUNK_HANZI, QA_MAX_SCRIPT_HANZI, QA_MAX_CHUNKS } from '../services/qa.js';
 import { signQuestion, verifyQuestion, QA_TYPES } from '../lib/qa-sign.js';
@@ -129,15 +131,25 @@ export function qaRoutes(r, { cfg, engine, services, db, bad, stamp, stream, spe
     }
     const gated = assessment?.gate === 'low_match';
     const toneFacts = assessment && !gated ? deriveFacts(assessment).confirmedToneErrors : [];
-    const qa = buildQaBlock({ chk, question: q, transcript, stt: { status: 'ok' }, tone, meaningOf });
+    // reused-phrase word check (CODE): key-point texts are the script units; offsets = key-point offsets inside the chunk of chunkIndex
+    const reuse = gated ? { findings: [], inserted: [] } : reuseFindings({ units: q.keyPoints.map((k) => ({ text: k.textZh, base: k.refStart, chunkIndex: k.chunkIndex, keyPointId: k.id })), transcript: ref, policy: P });
+    const wordFindings = reuse.findings;
+    const kpText = new Map(q.keyPoints.map((k) => [k.id, k.textZh]));
+    const wordCorrections = reuseCorrections(wordFindings, { meaningOf, modelOf: (f) => modelWindow(kpText.get(f.keyPointId) || f.text, f) });
+    // sourceChunk of an auto-saved word: the optional multipart `chunkText` when it provably is the script chunk (it must reproduce the key point at its offsets), else the key point text
+    const claimed = typeof b.chunkText === 'string' ? b.chunkText.trim() : '';
+    const chunkOk = claimed && [...claimed].length <= 200 && q.keyPoints.every((k) => Array.from(claimed).slice(k.refStart, k.refEnd).join('') === k.textZh);
+    const savedMissed = wordFindings.length ? wordFindings.flatMap((f) => saveMissed(db, reuseFacts([f]), chunkOk ? claimed : (kpText.get(f.keyPointId) || f.text), P)) : [];
+    const qa = buildQaBlock({ chk, question: q, transcript, stt: { status: 'ok' }, tone, meaningOf, wordFindings });
     const shown = assessment || { status: 'ok', engine: engine.name, mock: !!engine.mock, overall: null, syllables: [], words: [], matchesText: null, gate: null, lowConfidence: true };
-    const facts = { ...(assessment ? deriveFacts(assessment) : { confirmedToneErrors: [], uncertain: [] }), ...emptyWordFacts(), canPraise: qa.canPraise, completeness: 'unknown' };
+    const facts = { ...(assessment ? deriveFacts(assessment) : { confirmedToneErrors: [], uncertain: [] }), ...emptyWordFacts(), ...reuseFacts(wordFindings), canPraise: qa.canPraise, completeness: wordFindings.length ? 'incomplete' : 'unknown',
+      reusedPhrase: { findings: wordFindings.length, inserted: reuse.inserted } };
     facts.confirmedToneErrors = toneFacts;
-    send('assessment', { ...shown, lowConfidence: true, facts, wordStatus: [], savedMissed: [], basis: 'transcript', referenceText: ref, transcript, transcriptDerived: true, qa });
+    send('assessment', { ...shown, lowConfidence: true, facts, wordStatus: reuseWordStatus(wordFindings), savedMissed, basis: 'transcript', referenceText: ref, transcript, transcriptDerived: true, qa });
     S.markOk();
 
     const sp = speaker(S, b);
-    const finish = (extra) => { timings.totalMs = Date.now() - S.t0; return { ...extra, timings: { ...timings }, summary: { ...label, basis: 'transcript', transcriptUsed: true, questionId: q.questionId, confirmedToneErrors: toneFacts.length, comparisonStatus: qa.comparisonStatus, coveredCount: qa.coveredCount, totalCount: qa.totalCount, canPraise: qa.canPraise, tone: tone.status, ...extra.summary, timings: { ...timings } } }; };
+    const finish = (extra) => { timings.totalMs = Date.now() - S.t0; return { ...extra, timings: { ...timings }, summary: { ...label, basis: 'transcript', transcriptUsed: true, questionId: q.questionId, confirmedToneErrors: toneFacts.length, wordFindings: wordFindings.length, comparisonStatus: qa.comparisonStatus, coveredCount: qa.coveredCount, totalCount: qa.totalCount, canPraise: qa.canPraise, tone: tone.status, ...extra.summary, timings: { ...timings } } }; };
     if (gated) {
       send('status', { stage: 'coaching', skipped: true, code: 'low_match', message: assessment.gateMessage || 'The recording does not match what was transcribed.' });
       sp.unit({ kind: 'gate', text: QA_GATE_ZH });
@@ -145,9 +157,10 @@ export function qaRoutes(r, { cfg, engine, services, db, bad, stamp, stream, spe
       return send('done', finish({ corrections: [], summary: { coached: false, gate: 'low_match', gatePhraseZh: QA_GATE_ZH } }));
     }
     send('status', { stage: 'coaching' });
-    const plan = planQaCoach({ qa, chk, question: q, toneFacts, toneRef: ref });
+    const plan = planQaCoach({ qa, chk, question: q, toneFacts, toneRef: ref, wordCorrections });
     for (const u of plan.units) sp.unit(u);
     await sp.done(); if (S.closed) return;
+    if (savedMissed.length) fillGlosses(db, services.llm, savedMissed.map((x) => x.id)).catch(() => {});
     send('done', finish({ corrections: plan.corrections.map(publicCorrection), summary: { coached: true, llmCalled: chk.attempts !== undefined, droppedClaims: (chk.dropped || []).length, checkAttempts: chk.attempts ?? 0 } }));
   }
 }

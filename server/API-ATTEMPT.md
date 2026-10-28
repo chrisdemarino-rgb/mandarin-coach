@@ -167,7 +167,7 @@ event: done        data: {"correct":true,"counted":true,"correctStreak":1,"neede
 ## Retell mode (`assessMode:"retell"`): the learner retells `chunkText` freely, in their own words
 Pipeline: **STT** (gpt-4o-transcribe, zh, the reference is NEVER in the STT prompt; transcript normalised to *simplified* characters) -> in parallel **(a) meaning comparison LLM** (`RETELL_MODEL`, JSON mode, temperature 0, 9 s cap, 1 retry) and **(b) TonePerfect on the transcript** (see "Tone in retell") -> `assessment` (waits for both; TonePerfect is waited for at most 3 s after the comparison is ready) -> code-built coaching.
 The LLM sees ONLY `{reference, transcript}`. It proposes key ideas as `{refQuote (substring of the reference), covered, evidence (substring of the transcript), confidence}`; **CODE** resolves `refQuote` to code-point offsets (exact -> punctuation-insensitive -> fuzzy <= 25% edits; LLM-given numbers are never used; unresolvable spans are dropped), verifies every `evidence` quote against the transcript (pinyin-level, so trad/simp STT output is fine; a covered/partial idea with unverifiable evidence is demoted to `partial` + `confidence:"low"`, `evidence:null`), de-duplicates overlapping spans, renumbers `i1..` by position, and computes `coveredCount/totalCount/canPraise/missingIdeaIds`. Strict schema check; on malformed JSON it retries once, then `comparisonStatus:"unavailable"` with **no coverage claims**.
-Wording changes are NOT errors: **`wordStatus` is `[]` and no missed/substituted words are computed or auto-saved in retell** (`savedMissed:[]`, `facts.missingWords:[]`). Nothing is persisted: no audio, no transcript (the transcript is returned to the client only).
+Wording changes are NOT errors: **`wordStatus` is `[]`, `savedMissed` is `[]` and `facts.missingWords/substitutedWords` are `[]` in retell, EXCEPT for the reused-phrase word check** (a script word that is wrong/missing inside a phrase the learner reused almost verbatim — see "Reused-phrase word check" below; changed 2026-10-28). Nothing is persisted but those saved words: no audio, no transcript (the transcript is returned to the client only).
 
 `assessment` event, retell additions (everything else as in close mode; `basis:"transcript"`, `transcriptDerived:true`, `lowConfidence:true`, `referenceText` = hanzi of the transcript, `facts.canPraise` = `retell.canPraise`):
 ```
@@ -208,6 +208,117 @@ The acoustic reference is the **transcript** (hanzi only, simplified), `lowConfi
 ### Validation of LLM text (retell)
 `wrong_meaning`/`language` corrections must quote the transcript (verified); `wrong_meaning` needs a non-covered idea; explanations containing tone talk or praise are replaced by a fixed line (`source:"server_fact"`); `modelText` must be grounded (<= 15% characters not in the reference/function words, no latin/digits, no tone talk) else the reference span is used instead; the LLM `summary` is spoken only when `canPraise` and contains no negative words.
 
+
+## Reused-phrase word check (retell + Q&A; added 2026-10-28, bug: a mispronounced script word must never get an all-clear)
+**Why.** The meaning check allows own wording, so `一种不太好的谩骂的天赋` (STT of a mispronounced 驾驭) still "covered" the key point 一种不太好驾驭的天赋 and the coach said "回答得很好，要点都讲到了". Now CODE (no LLM) looks for stretches of the transcript that reuse a script phrase almost verbatim and reports the script words that are wrong/missing in them.
+
+**Detection** (`services/reuse.js`, thresholds = named constants in `ASSESSMENT_POLICY`): units = retell: the chunk; Q&A: each key point text of the signed question. Transcript is normalised to simplified (opencc). Smith-Waterman local alignment at pinyin level (same toneless pinyin = match, near-homophone = partial match, so STT homophones never count), up to 3 passes. A region counts as a **reuse** only if `longest verbatim run >= REUSE_MIN_RUN (4)`, `matched chars >= REUSE_MIN_MATCHED (5)` and `matched / max(script span, matched + heard content chars) >= REUSE_MIN_RATIO (0.6)`; everything else (paraphrases, noise, hallucinations) is never flagged. Inside a reuse region the gaps between matching runs are classified (function chars 的了就也都还又和而着过吗呢吧啊嘛呀么地得之才很 + pronouns 我你他她它们这那 and punctuation ignored; 不/没 are content):
+- script content word(s) vs heard content word(s) => **`substituted`**, `heard` = the word STT wrote. `confidence:"high"` when both neighbouring runs are verbatim (>= `REUSE_FLANK_MIN` (2) chars each side, required for ANY finding), the heard word shares no character with the script word and is about as long; `"medium"` otherwise (variant sharing a character, e.g. 驾驭 vs 驾驶; one-sided anchor at the edge of the reuse = at most 3 chars, same-size replacement only).
+- script word absent, nothing heard => **`missed`** (`reason:"omitted"`, `confidence:"medium"`), only when the WHOLE script word is gone (学习 -> 学, 自行车 -> 车 are wording, not omissions).
+- extra heard content words with no script counterpart => insertion, **informational only** (never a finding, never blocks praise); listed in `facts.reusedPhrase.inserted` (strings) for information.
+- gaps longer than `REUSE_MAX_BLOCK` (6) chars, gaps across sentence punctuation, and script words that appear verbatim elsewhere in the transcript are never flagged. At most `REUSE_MAX_FINDINGS` (3), high first. Flagged spans are expanded to whole script words.
+
+**Consequences** (only when findings exist): `praiseLevel` is never `"full"` (`"soft"` or `"none"`), `canPraise:false` (also `facts.canPraise`), `praiseBlockedBy:["word_check"]`, `wordCheck:{status:"found",count}`, `facts.completeness:"incomplete"`; the all-clear line is never spoken. Coaching: opener `有个词和原文不一样。` (instead of the soft praise line), then max **2** corrections in total, **word problems first**, each followed by a `correction_model` `应该这样说：<script word>` (TTS = the correct word, like close mode): high `你说的是“谩骂”，原文是“驾驭”。`, medium `我好像听到的是“谩骂”，原文是“驾驭”。`, missed `漏掉了“X”这个词。` (medium: `好像漏掉了“X”这个词。`). Text is built from the diff facts only. Tone rules are unchanged (the transcript is never used for tone; TonePerfect-on-transcript in retell is untouched).
+
+**Data.** Each finding appears in `wordStatus` (one entry per script word, NOT per character; `reuse:true`): `{start,end,text,pinyin,status:"substituted"|"missed",heard?|reason:"omitted",source:"stt",confidence,detail,reuse:true,chunkIndex?,keyPointId?}`; `start/end` are code-point offsets into the exact `chunkText` (retell: the chunk you sent; Q&A: the question's chunk — `chunkIndex` + `keyPointId` are on the entry; offsets = `keyPoint.refStart` + local offset). Also in `facts.substitutedWords` / `facts.missingWords`, `retell.suggestedWords` / `qa.suggestedWords` (`reason:"substituted"|"omitted"`, listed first), `done.corrections[]` (`kind:"substituted"|"missing"`, `heard`, `factRef:"reuse:N"`), `coach_text` (`start/end/caption`), and **auto-saved** to the "words I don't know" list exactly like close rehearsal (`savedMissed` on the event, `sourceChunk` = the script chunk; no audio / transcript / heard text persisted — the heard text is only in the event). `wordStatus` / `savedMissed` stay `[]` in retell/Q&A when nothing is found. **Q&A: send the optional multipart field `chunkText`** (the script chunk the question was generated from; used as `sourceChunk` only when it reproduces EVERY key point text at its `refStart`; otherwise the key point text is stored).
+
+**Highlighting (Frontend).** Highlight `chunkText[start,end)` ("In your script") in the substituted colour and show a "Word check" row: `你说的是“<heard>”，原文是“<text>”`. Exact case (real output of the fakes, Q&A; retell has the same shape without `chunkIndex/keyPointId`, `retell.suggestedWords[].ideaId`, `retell.praiseBlockedBy`, `retell.wordCheck`):
+```json
+{
+ "basis": "transcript",
+ "transcript": "这种自我能量是一种不太好的谩骂的天赋。",
+ "lowConfidence": true,
+ "wordStatus": [
+  {
+   "start": 15,
+   "end": 17,
+   "text": "驾驭",
+   "pinyin": "jià yù",
+   "status": "substituted",
+   "heard": "谩骂",
+   "source": "stt",
+   "confidence": "high",
+   "detail": "a script word inside a phrase the transcript reuses almost verbatim is replaced by a different word (matching runs 5/3)",
+   "reuse": true,
+   "chunkIndex": 0,
+   "keyPointId": "k1"
+  }
+ ],
+ "savedMissed": [
+  {
+   "id": 1,
+   "text": "驾驭",
+   "pinyin": "jià yù",
+   "meaning": null,
+   "reason": "substituted",
+   "start": 15,
+   "end": 17,
+   "missCount": 1,
+   "isNew": true
+  }
+ ],
+ "facts": {
+  "substitutedWords": [
+   {
+    "ref": "reuse:0",
+    "score": null,
+    "text": "驾驭",
+    "pinyin": "jià yù",
+    "start": 15,
+    "end": 17,
+    "chars": [],
+    "source": "stt",
+    "confidence": "high",
+    "heard": "谩骂",
+    "chunkIndex": 0,
+    "keyPointId": "k1"
+   }
+  ],
+  "missingWords": [],
+  "completeness": "incomplete",
+  "canPraise": false,
+  "reusedPhrase": {
+   "findings": 1,
+   "inserted": []
+  }
+ },
+ "qa": {
+  "keyPoints": [
+   {
+    "id": "k1",
+    "textZh": "一种不太好驾驭的天赋",
+    "refStart": 10,
+    "refEnd": 20,
+    "chunkIndex": 0,
+    "covered": true,
+    "evidence": "一种不太好的谩骂的天赋",
+    "confidence": "high"
+   }
+  ],
+  "canPraise": false,
+  "praiseLevel": "soft",
+  "praiseBlockedBy": [
+   "word_check"
+  ],
+  "wordCheck": {
+   "status": "found",
+   "count": 1
+  },
+  "suggestedWords": [
+   {
+    "text": "驾驭",
+    "pinyin": "jià yù",
+    "meaning": null,
+    "keyPointId": "k1",
+    "reason": "substituted"
+   }
+  ],
+  "comparisonStatus": "ok"
+ }
+}
+```
+Coach lines (`coach_text`): opener: 有个词和原文不一样。 | correction (start 15, end 17, caption "驾驭 jià yù"): 你说的是“谩骂”，原文是“驾驭”。 | correction_model (start 15, end 17): 应该这样说：驾驭 | next: 再试一次，或者下一个问题。
+Q&A chunk used: `他说，这种自我能量是一种不太好驾驭的天赋。` (`驾驭` = code points 15-17).
 
 # Q&A practice mode (added 2026-10-28)
 
@@ -328,7 +439,7 @@ Level 1 = the signed hint (does not contain the answer words); level 2 = code-bu
  ]
 }
 ```
-`suggestedWords` = vocabulary of the key points (same builder as retell), **never auto-saved**.
+`suggestedWords` = vocabulary of the key points (same builder as retell); only the words found by the reused-phrase word check (below) are auto-saved.
 
 ## POST /api/qa/attempt   (multipart -> SSE, same plumbing as `/api/attempt`)
 Fields: `audio` (file, <= 10 MB), `question` (**string**: the JSON payload from `/next`, <= 16 KB), `attemptId` (8-100 chars; **idempotent replay** within 10 min exactly like `/api/attempt`; use a new id for every recording, also for a retry of the same question), optional `voice`, `speed` (coach TTS). `source:"tts"` audio is rejected. Errors before the stream: `400 missing_audio|invalid_question|invalid_question_signature|invalid_attempt_id|tts_audio_rejected`, `413 upload_too_large|question_too_large`, `409 attempt_in_progress`, `429`.
@@ -336,7 +447,7 @@ Fields: `audio` (file, <= 10 MB), `question` (**string**: the JSON payload from 
 Events: `status*`, `assessment | error`, `status(coaching)`, `coach_text*`, `coach_audio*`, `done` (same names/semantics as `/api/attempt`; `coach_text` payload is `{delta,index,role,caption?,start?,end?}`).
 Pipeline: STT (no reference in the prompt, normalised to simplified) -> **LLM answer check** (`QA_MODEL`, temp 0, strict JSON, 1 retry) in parallel with the optional **TonePerfect** check of the transcript (same policy as retell: `lowConfidence:true`, skipped when the transcript has digits/latin or > 100 hanzi, waits at most `QA_TONE_WAIT_MS=3000`, skipped silently with a reason otherwise). The LLM sees ONLY the signed key points + model answer + transcript; it returns per key point `covered true|"partial"|false` + `evidence` + `confidence`, `wrongFacts[{claim,contradicts,confidence}]`, `answeredQuestion`. **CODE** then verifies: evidence and wrong-fact quotes must really be in the transcript (pinyin-level, trad/simp tolerant; otherwise `covered` is demoted to `partial`/`low` and the claim dropped), a wrong fact needs a non-low confidence, an existing key point id and may not contradict a covered key point (max 2), all signed key point ids must be present, and an answer sharing no words with the question/key points (or "I don't know") is `off_topic`/`dont_know` even if the model said "answered". Counts, `canPraise`, `praiseLevel` are computed by code; every spoken line is code-built (the LLM never writes coaching text, never gives offsets).
 
-`assessment` event: the usual fields of the retell assessment (`basis:"transcript"`, `referenceText` = the transcript's hanzi, `transcript`, `facts`, `wordStatus:[]`, `savedMissed:[]`, `lowConfidence:true`, + TonePerfect fields when tone ran) **plus `qa`** (real output; here key point 2 is missed):
+`assessment` event: the usual fields of the retell assessment (`basis:"transcript"`, `referenceText` = the transcript's hanzi, `transcript`, `facts`, `wordStatus:[]` and `savedMissed:[]` (except reused-phrase findings, below), `lowConfidence:true`, + TonePerfect fields when tone ran) **plus `qa`** (real output; here key point 2 is missed):
 ```json
 {
  "questionId": "qc0b9f15c685b",

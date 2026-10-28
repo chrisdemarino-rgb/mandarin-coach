@@ -8,7 +8,7 @@
 // GROUNDING: the only truth is the script chunk (for questions) and the signed key points (for checking). Nothing about tones comes from the transcript.
 import { pinyin as pinyinPro } from 'pinyin-pro';
 import { ServiceError } from './openai.js';
-import { resolveSpan, quoteInTranscript, isGrounded, hanziOnly, hz, cleanLine, TONE_CLAIM, NON_ZH, toneCorrection, suggestWords } from './retell.js';
+import { resolveSpan, quoteInTranscript, isGrounded, hanziOnly, hz, cleanLine, TONE_CLAIM, NON_ZH, toneCorrection, suggestWords, wordSuggestions } from './retell.js';
 import { questionIdOf, QA_TYPES } from '../lib/qa-sign.js';
 
 export const MAX_KEY_POINTS = 3;
@@ -22,6 +22,7 @@ const ZH_N = ['', '一', '二', '三', '四'];
 export const QA_ALL_ZH = '回答得很好，要点都讲到了。';
 export const QA_ALL_TONE_ZH = '要点都讲到了，有一个发音可以再练一练。';
 export const QA_SOFT_ZH = '还差一点，有个要点没讲全。';
+export const QA_WORD_ZH = '有个词和原文不一样。';   // reused-phrase word check found a substituted/omitted script word: neutral, never praise
 export const QA_WRONG_ZH = '有些地方和原文不一样。';
 export const QA_DONTKNOW_ZH = '没关系，这个问题还没答出来。';
 export const QA_OFFTOPIC_ZH = '这个回答好像没有回答问题。';
@@ -31,7 +32,7 @@ export const QA_NEXT_RETRY_ZH = '再试一次，或者下一个问题。';
 export const QA_NEXT_OK_ZH = '来下一个问题吧。';
 export const QA_NEXT_HINT_ZH = '想要提示可以点提示，也可以再试一次。';
 export const qaMissingOpener = (n) => `有${ZH_N[Math.min(n, 4)] || '几'}个要点没讲到。`;
-export const QA_PHRASES_ZH = [QA_ALL_ZH, QA_ALL_TONE_ZH, QA_SOFT_ZH, QA_WRONG_ZH, QA_DONTKNOW_ZH, QA_OFFTOPIC_ZH, QA_GATE_ZH, QA_UNAVAILABLE_ZH, QA_NEXT_RETRY_ZH, QA_NEXT_OK_ZH, QA_NEXT_HINT_ZH, ...[1, 2, 3].map(qaMissingOpener)];
+export const QA_PHRASES_ZH = [QA_ALL_ZH, QA_ALL_TONE_ZH, QA_SOFT_ZH, QA_WORD_ZH, QA_WRONG_ZH, QA_DONTKNOW_ZH, QA_OFFTOPIC_ZH, QA_GATE_ZH, QA_UNAVAILABLE_ZH, QA_NEXT_RETRY_ZH, QA_NEXT_OK_ZH, QA_NEXT_HINT_ZH, ...[1, 2, 3].map(qaMissingOpener)];
 const DONT_KNOW_RE = /不知道|不清楚|不记得|忘了|想不起来|不会说|没听懂|不太懂|不明白|我不会/;
 const GENERIC_HINT_ZH = '想一想原文里是怎么说的。';
 
@@ -245,31 +246,35 @@ export function suggestQaWords(keyPoints, transcript, meaningOf) {
   return suggestWords(ideas, text, transcript, meaningOf).map(({ ideaId, ...w }) => ({ ...w, keyPointId: ideaId }));
 }
 
-export function buildQaBlock({ chk, question, transcript, stt, tone, meaningOf }) {
+export function buildQaBlock({ chk, question, transcript, stt, tone, meaningOf, wordFindings = [] }) {
   const base = { questionId: question.questionId, transcript, sttStatus: stt?.status ?? 'ok', tone, modelAnswerZh: question.modelAnswerZh };
+  const owner = (f) => ({ keyPointId: f.keyPointId ?? null });
   if (chk.status !== 'ok') {
     return { ...base, keyPoints: question.keyPoints.map((k) => ({ ...k, covered: null, evidence: null, confidence: null })), coveredCount: 0, totalCount: question.keyPoints.length, partialCount: 0,
-      wrongFacts: [], answeredQuestion: null, answerKind: null, canPraise: false, praiseLevel: 'none', comparisonStatus: 'unavailable', comparisonReason: chk.reason, missingKeyPointIds: [], suggestedWords: [] };
+      wrongFacts: [], answeredQuestion: null, answerKind: null, canPraise: false, praiseLevel: 'none', comparisonStatus: 'unavailable', comparisonReason: chk.reason, missingKeyPointIds: [], suggestedWords: wordSuggestions(wordFindings, [], meaningOf, owner), ...(wordFindings.length ? { praiseBlockedBy: ['word_check'] } : {}) };
   }
   const keyPoints = chk.keyPoints.map(({ id, textZh, refStart, refEnd, chunkIndex, covered, evidence, confidence, issue }) => ({ id, textZh, refStart, refEnd, chunkIndex, covered, evidence, confidence, ...(issue ? { issue } : {}) }));
   const coveredCount = keyPoints.filter((x) => x.covered === true).length;
   const missing = keyPoints.filter((x) => x.covered === false);
   const allTrue = coveredCount === keyPoints.length && keyPoints.every((x) => x.confidence !== 'low') && chk.wrongFacts.length === 0 && chk.answeredQuestion;
-  const praiseLevel = allTrue ? 'full' : (missing.length || chk.wrongFacts.length || !chk.answeredQuestion) ? 'none' : 'soft';
+  const praiseLevel = allTrue && !wordFindings.length ? 'full' : (missing.length || chk.wrongFacts.length || !chk.answeredQuestion) ? 'none' : 'soft';
   return { ...base, keyPoints, coveredCount, totalCount: keyPoints.length, partialCount: keyPoints.filter((x) => x.covered === 'partial').length, wrongFacts: chk.wrongFacts,
     answeredQuestion: chk.answeredQuestion, answerKind: chk.answerKind, canPraise: praiseLevel === 'full', praiseLevel, comparisonStatus: 'ok', missingKeyPointIds: missing.map((x) => x.id),
-    suggestedWords: suggestQaWords(chk.keyPoints, transcript, meaningOf) };
+    suggestedWords: wordSuggestions(wordFindings, suggestQaWords(chk.keyPoints, transcript, meaningOf), meaningOf, owner),
+    ...(wordFindings.length ? { praiseBlockedBy: allTrue ? ['word_check'] : [], wordCheck: { status: 'found', count: wordFindings.length } } : {}) };
 }
 
 const kpCorrection = (kind, kp, extra = {}) => ({ kind, targetText: kp.textZh, start: kp.refStart, end: kp.refEnd, chunkIndex: kp.chunkIndex, keyPointId: kp.id, caption: kp.textZh, modelText: kp.textZh,
   factRef: `kp:${kp.id}`, source: 'server_fact', evidence: { source: 'transcript', confidence: kp.confidence }, ...extra });
 
 /** All spoken/written lines are code-built from validated facts. Returns { units:[{kind,text,correction?}], corrections }. */
-export function planQaCoach({ qa, chk, question, toneFacts = [], toneRef = '' }) {
+export function planQaCoach({ qa, chk, question, toneFacts = [], toneRef = '', wordCorrections = [] }) {
   const units = []; const corrections = []; const say = (kind, text, correction) => units.push({ kind, text, ...(correction ? { correction } : {}) });
   const toneUnits = (slots) => { for (const f of toneFacts.slice(0, slots)) { const c = toneCorrection(f, toneRef); corrections.push(c); say('correction', c.explanationZh, c); if (c.modelText) say('correction_model', `应该这样说：${c.modelText}`, c); } };
   if (qa.comparisonStatus !== 'ok') {
-    say('opener', QA_UNAVAILABLE_ZH); toneUnits(1); say('next', QA_NEXT_RETRY_ZH);
+    say('opener', QA_UNAVAILABLE_ZH);
+    for (const c of wordCorrections.slice(0, MAX_QA_CORRECTIONS)) { corrections.push(c); say('correction', c.explanationZh, c); say('correction_model', `应该这样说：${c.modelText}`, c); }
+    toneUnits(Math.min(1, MAX_QA_CORRECTIONS - corrections.length)); say('next', QA_NEXT_RETRY_ZH);
     return { units, corrections };
   }
   if (!qa.answeredQuestion) {                                  // off-topic / "I don't know": say so, offer the hint (the model answer stays one tap away)
@@ -281,14 +286,16 @@ export function planQaCoach({ qa, chk, question, toneFacts = [], toneRef = '' })
   for (const w of chk.wrongFacts) { const kp = byId.get(w.contradictsKeyPointId); if (kp) cands.push(kpCorrection('wrong_fact', kp, { explanationZh: `你说的“${w.claimZh}”和原文不一样。`, heard: w.claimZh })); }
   for (const kp of chk.keyPoints.filter((k) => k.covered === false && k.issue !== 'wrong_fact')) cands.push(kpCorrection('missing_key_point', kp, { explanationZh: `${kp.confidence === 'low' ? '好像没讲到' : '漏掉了'}这个要点：${kp.textZh}` }));
   for (const kp of chk.keyPoints.filter((k) => k.covered === 'partial' && k.issue !== 'wrong_fact')) cands.push(kpCorrection('missing_key_point', kp, { explanationZh: `${kp.confidence === 'low' ? '这个要点好像没讲全' : '这个要点只讲了一部分'}：${kp.textZh}` }));
-  const meaning = cands.slice(0, MAX_QA_CORRECTIONS);
+  const words = wordCorrections.slice(0, MAX_QA_CORRECTIONS);   // a substituted/omitted SCRIPT word in a reused phrase ranks first
+  const meaning = cands.slice(0, MAX_QA_CORRECTIONS - words.length);
   if (qa.praiseLevel === 'full') say(toneFacts.length ? 'opener' : 'praise', toneFacts.length ? QA_ALL_TONE_ZH : QA_ALL_ZH);
-  else if (qa.praiseLevel === 'soft') say('opener', QA_SOFT_ZH);
+  else if (qa.praiseLevel === 'soft') say('opener', words.length ? QA_WORD_ZH : QA_SOFT_ZH);
   else { const plain = chk.keyPoints.filter((k) => k.covered === false && k.issue !== 'wrong_fact').length; say('opener', plain ? qaMissingOpener(plain) : QA_WRONG_ZH); }
+  for (const c of words) { corrections.push(c); say('correction', c.explanationZh, c); say('correction_model', `应该这样说：${c.modelText}`, c); }
   for (const c of meaning) { corrections.push(c); say('correction', c.explanationZh, c); }
   if (meaning.length) say('correction_model', `可以这样说：${question.modelAnswerZh}`, { ...meaning[0], modelText: question.modelAnswerZh });
-  else if (qa.praiseLevel !== 'full') say('correction_model', `可以这样说：${question.modelAnswerZh}`);
-  toneUnits(MAX_QA_CORRECTIONS - meaning.length);
+  else if (qa.praiseLevel !== 'full' && !(words.length && qa.praiseLevel === 'soft')) say('correction_model', `可以这样说：${question.modelAnswerZh}`);
+  toneUnits(MAX_QA_CORRECTIONS - words.length - meaning.length);
   say('next', qa.praiseLevel === 'full' ? QA_NEXT_OK_ZH : QA_NEXT_RETRY_ZH);
   return { units, corrections };
 }

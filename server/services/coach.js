@@ -157,7 +157,7 @@ export function splitSentences(text) {
 
 // ---------------------------------------------------------------------------------------------------------------------------
 // Code-built corrections for missing / substituted / unclear WORDS (never LLM text). All content comes from facts computed by code.
-const modelWindow = (chunkText, w) => {
+export const modelWindow = (chunkText, w) => {
   // a lone character is hard to hear in isolation: model it together with a neighbouring script word (max 4 chars)
   if (hanzi(w.text).length >= 2) return hanzi(w.text);
   const segs = [...new Intl.Segmenter('zh', { granularity: 'word' }).segment(String(chunkText))].map((x) => x.segment).filter((x) => hanzi(x));

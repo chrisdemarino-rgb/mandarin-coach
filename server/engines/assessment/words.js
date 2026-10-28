@@ -45,7 +45,7 @@ export function normalizeTranscript(text) {
 }
 
 // ---- pinyin helpers (toneless; ü->u so 'xue'/'xüe' agree)
-const toneless = (chars) => {
+export const toneless = (chars) => {
   if (!chars.length) return [];
   const arr = pinyinPro(chars.join(''), { toneType: 'none', type: 'array' });
   return chars.map((c, i) => (arr[i] && arr[i] !== c ? String(arr[i]) : c).replace(/ü/g, 'u'));

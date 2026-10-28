@@ -64,7 +64,7 @@ test('parseCompare: strict schema (bad shapes throw, unknown correction kinds sk
 });
 
 // ------------------------------------------------------------------------------------------------ end to end
-test('RETELL all ideas covered with DIFFERENT wording: canPraise, no corrections, retell block with offsets; TonePerfect scored against the transcript; wordStatus not computed', async () => {
+test('RETELL all ideas covered with DIFFERENT wording: canPraise, no corrections, retell block with offsets; TonePerfect scored against the transcript; wordStatus [] when nothing is reused', async () => {
   svc.state.sttText = COVERED_TEXT; svc.state.chatScript = cmpJson(IDEAS_ALL());
   const t = await server(envOai());
   try {

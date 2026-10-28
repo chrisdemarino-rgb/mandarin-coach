@@ -2,6 +2,7 @@
 import { $, $$, esc, formatPinyin, announce, fmtTime } from "./dom.js";
 import { QA_MARKS, segmentsOf, placedCount } from "../api-qa.js";
 import { ideaKind } from "../retell.js";
+import { createHearMine } from "../hear-mine.js";
 
 const STAGE = { uploading: "Uploading your answer…", transcribing: "Writing down what you said…", assessing: "Checking your answer…", coaching: "Checking the meaning against the script…" };
 
@@ -27,6 +28,8 @@ export function initQaUI(Q, S, { onLeave, onSave = () => {} }) {
   $("#btnQaHearAnswer").addEventListener("click", () => Q.hearAnswer());
   $("#btnQaErrRetry").addEventListener("click", () => Q.errorAction());
   $("#btnQaErrSkip").addEventListener("click", () => { Q.error = null; Q.skip(); });
+  // "Hear my recording" next to What I heard: the in-memory take through the shared <audio> element (hear-mine.js).
+  const hearMine = createHearMine($("#btnQaHearMine"), { getTake: () => (Q.state === "result" ? Q.recording : null), blocked: () => Q.state !== "result" || Q.coachPlaying || Q.questionPhase === "loading" || Q.answerPhase === "loading" });
   $("#btnQaHearCoach").addEventListener("click", () => (Q.coachPlaying ? Q.stopCoach() : Q.replayCoach()));
 
   const OUT_CLASS = { covered: "s-good", checked: "s-good", partial: "s-review", missing: "s-review", unchecked: "s-none" };
@@ -154,6 +157,7 @@ export function initQaUI(Q, S, { onLeave, onSave = () => {} }) {
           + `<p class="muted">${s.pointsTotal ? "Key points are counted from your last checked answer to each question." : "No answer could be compared, so no key points are counted."}${s.unchecked ? ` ${s.unchecked} answer${s.unchecked === 1 ? "" : "s"} could not be compared.` : ""}${s.skipped ? ` ${s.skipped} question${s.skipped === 1 ? "" : "s"} skipped.` : ""}</p>`;
     }
 
+    hearMine.sync();
     primary.textContent = primaryLabel();
     primary.disabled = st === "processing" || st === "loading" || (st === "idle" && !S.chunks.length);
     primary.classList.toggle("recording", st === "listening");

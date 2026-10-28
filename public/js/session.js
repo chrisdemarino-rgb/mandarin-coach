@@ -459,6 +459,8 @@ export function createSession() {
   S.finish = () => { if (machine.state === "idle") return; finishSession(); };
   function finishSession() {
     abortFlow(); stopAudio(); cancelTake(); releaseMic();
+    if (S.recording && S.recording.url) URL.revokeObjectURL(S.recording.url);   // session ended: the take is not kept (memory only)
+    S.recording = null;
     machine.send("FINISH");
     persistProgress();
     S.emit();

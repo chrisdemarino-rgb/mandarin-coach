@@ -304,6 +304,7 @@ export async function play(src) {
   // If the mic IS open we must stay on 'play-and-record' (setting 'playback' would end the mic track per the W3C draft).
   if (!streamLive()) setSession('playback');
   let url = src;
+  if (currentObjectUrl) { URL.revokeObjectURL(currentObjectUrl); currentObjectUrl = null; }   // never leak the previous clip's URL (stopped/replaced clips never fire 'ended')
   if (src instanceof Blob) { currentObjectUrl = URL.createObjectURL(src); url = currentObjectUrl; }
   own('playback-start');
   clearTimeout(primeTimer); audioEl.loop = false;   // a prime() silent loop may still be running on this element
@@ -321,6 +322,7 @@ export function stop() {
   own('stop');
   clearTimeout(primeTimer); audioEl.loop = false;
   try { audioEl.pause(); } catch (e) {}
+  if (currentObjectUrl) { URL.revokeObjectURL(currentObjectUrl); currentObjectUrl = null; }   // a stopped clip (e.g. the user's own take) is not kept
   lastPlaybackEndedAt = Date.now();
   if (state === 'playing') { settlePlay(null); setState(streamLive() ? 'armed' : 'idle'); }
 }

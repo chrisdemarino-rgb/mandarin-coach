@@ -180,6 +180,7 @@
             <button id="btnClearSel" class="btn ghost small" type="button">Clear</button>
           </div>
           <div id="transcriptBox" class="transcript" hidden></div>
+          <div class="row gap wrap hear-mine-row"><button id="btnHearMine" class="btn small" type="button" hidden>&#128266; Hear my recording</button></div>
           <div id="retellWrap" class="retell-wrap" hidden>
             <h3 class="h3">Key ideas</h3>
             <div id="ideaBody"></div>
@@ -199,7 +200,6 @@
             <p id="savedNote" class="saved-note" role="status" hidden></p>
           </div>
           <div class="row gap wrap">
-            <button id="btnPlayback" class="btn" type="button">&#9654; Play my recording</button>
             <button id="btnHearCoach" class="btn" type="button">&#128266; Hear coach again</button>
           </div>
           <p id="engineTag" class="engine-tag muted"></p>
@@ -295,6 +295,7 @@
           </div>
           <div id="drillCoach" class="coach-lines" lang="zh-CN"></div>
           <div class="row gap wrap">
+            <button id="btnDrillHearMine" class="btn" type="button" hidden>&#128266; Hear my recording</button>
             <button id="btnDrillHearCoach" class="btn" type="button">&#128266; Hear coach again</button>
           </div>
         </div>
@@ -379,7 +380,7 @@
             <div id="qaBadge" class="score-badge" aria-hidden="true"></div>
             <div><div id="qaVerdict" class="score-label"></div><div id="qaVerdictNote" class="muted"></div></div>
           </div>
-          <div id="qaHeard" class="transcript"><h3 class="h3">What I heard</h3><p id="qaHeardText" lang="zh-CN"></p><p class="muted">This is only the speech-to-text transcript. It is not used as tone evidence.</p></div>
+          <div id="qaHeard" class="transcript"><h3 class="h3">What I heard</h3><p id="qaHeardText" lang="zh-CN"></p><p><button id="btnQaHearMine" class="btn small" type="button" hidden>&#128266; Hear my recording</button></p><p class="muted">This is only the speech-to-text transcript. It is not used as tone evidence.</p></div>
           <div id="qaPointsWrap"><h3 class="h3">Key points</h3><ul id="qaPoints" class="idea-list" lang="zh-CN"></ul></div>
           <div id="qaSourceWrap"><h3 class="h3">In your script</h3><p id="qaSource" class="qa-source" lang="zh-CN"></p></div>
           <div id="qaCheck" class="notice qa-check" hidden></div>

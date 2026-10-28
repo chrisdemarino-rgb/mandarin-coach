@@ -1,6 +1,7 @@
 // Drill screen wiring: reads the drill controller `D` (js/drill.js), never touches audio or network itself.
 import { $, $$, esc, formatPinyin, announce, fmtTime } from "./dom.js";
 import { streakLabel } from "../api-words.js";
+import { createHearMine } from "../hear-mine.js";
 
 export function initDrillUI(D, S, { onLeave }) {
   let rafId = 0, lastKey = "";
@@ -22,6 +23,8 @@ export function initDrillUI(D, S, { onLeave }) {
   $("#btnDrillErrRetry").addEventListener("click", () => D.errorAction());
   $("#btnDrillErrSkip").addEventListener("click", () => { D.error = null; D.skip(); });
   $("#btnDrillHearCoach").addEventListener("click", () => (D.coachPlaying ? D.stopCoach() : D.replayCoach()));
+  // "Hear my recording": the in-memory take through the shared <audio> element (hear-mine.js). Blocked while recording/checking or while the coach speaks.
+  const hearMine = createHearMine($("#btnDrillHearMine"), { getTake: () => (D.state === "result" ? D.recording : null), blocked: () => D.state !== "result" || D.coachPlaying });
 
   function primaryLabel() {
     switch (D.state) {
@@ -94,6 +97,7 @@ export function initDrillUI(D, S, { onLeave }) {
         : `<h2>Nothing to drill</h2><p class="muted">${D.error ? esc(D.error.message) : "Your Words to practise list is empty. Words you miss during practice will be added automatically."}</p>`;
     }
 
+    hearMine.sync();
     primary.textContent = primaryLabel();
     primary.disabled = st === "processing" || st === "idle";
     primary.classList.toggle("recording", st === "listening");

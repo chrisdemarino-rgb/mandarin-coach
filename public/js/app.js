@@ -13,6 +13,7 @@ import { initDrillUI } from "./ui/drill.js";
 import { isPass } from "./assess.js";
 import { createQa } from "./qa.js";
 import { initQaUI } from "./ui/qa.js";
+import { createHearMine } from "./hear-mine.js";
 
 const S = createSession();
 const D = createDrill(S);
@@ -177,7 +178,8 @@ btn.pause.addEventListener("click", () => (S.state === "paused" ? S.resume() : S
 btn.retry.addEventListener("click", () => S.retry());
 btn.skip.addEventListener("click", () => S.skip());
 btn.finish.addEventListener("click", () => S.finish());
-$("#btnPlayback").addEventListener("click", () => S.playTake());
+// "Hear my recording" (replaces the old Play-my-recording button): shared-element playback of the in-memory take, see hear-mine.js
+const hearMine = createHearMine($("#btnHearMine"), { getTake: () => (S.state === "result" || S.state === "playback" ? S.recording : null), blocked: () => S.state !== "result" || S.coachPlaying });
 $("#btnHearCoach").addEventListener("click", () => S.replayCoach());
 $("#btnHear").addEventListener("click", () => S.hearModel());
 // Retell: the text is hidden by default; Peek is counted (S.notePeek) and noted in the result. The flag resets for each new attempt.
@@ -279,7 +281,7 @@ function render() {
     const o = { showPinyin: store.settings.showPinyin, showFeedback: store.settings.showFeedback, cueShowsText: !S.cueFlow || peekOn() };
     if (resultView.shown !== S.assessment) { resultView.show(S, o); resultView.shown = S.assessment; } else { resultView.el.hidden = false; resultView.update(S, o); }
   } else { resultView.hide(); resultView.shown = null; }
-  $("#btnPlayback").disabled = st !== "result" || !S.recording;
+  hearMine.sync();
   $("#btnHearCoach").textContent = S.coachPlaying && S.playPos.what === "coach" ? "\u25A0 Stop coach" : "\u{1F50A} Hear coach again";
   $("#btnHearCoach").onclick = () => (S.coachPlaying ? S.stopCoach() : S.replayCoach());
 

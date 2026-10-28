@@ -395,3 +395,30 @@ body[data-view="drill"] #view-practice { display: none; }
 .rch.diff > span { text-decoration: underline double var(--bad); text-underline-offset: 4px; }
 .rch.part .hl-m, .rch.diff .hl-m { position: absolute; top: -6px; right: -4px; font-size: 13px; line-height: 1; padding: 2px 5px; color: var(--card); }
 .rch.diff .hl-m { background: var(--bad); }
+
+/* ---- Q&A practice (own screen, like the drill) ---- */
+body[data-view="qa"] #view-qa { display: flex; padding: 0; gap: 0; overflow: hidden; }
+body[data-view="qa"] #view-practice { display: none; }
+.st-asking, .st-loading { flex-direction: column; }
+.st-loading { flex-direction: row; align-items: center; gap: 14px; }
+.qa-intro { border-left: 6px solid var(--accent); }
+.qa-intro p { margin: 6px 0; }
+.qa-question { font-size: 30px !important; line-height: 1.45 !important; min-height: 0 !important; margin: 8px 0 4px; }
+.qa-help { margin-top: 10px; }
+.qa-help .btn { flex: 1 1 120px; }
+.qa-hints { margin: 8px 0; display: flex; flex-direction: column; gap: 6px; }
+.qa-hint { font-size: 22px; margin: 0; border-left: 4px dashed var(--muted); padding-left: 10px; }
+.qa-hint .badge { font-size: 13px; margin-right: 6px; }
+.qa-answer { margin: 10px 0; padding: 10px 12px; border: 2px solid var(--good); border-radius: 12px; background: var(--good-bg); }
+.qa-answer p { margin: 6px 0; }
+.qa-answer #qaAnswerText { font-size: 24px; }
+.qa-source { font-size: 26px; line-height: 2; margin: 4px 0; }
+.hl-covered { text-decoration-line: underline; text-decoration-style: solid; text-decoration-thickness: 3px; text-decoration-color: var(--good); background: var(--good-bg); }
+.hl-m-covered { background: var(--good); color: var(--card); }
+.idea.is-covered .why { color: var(--good); font-weight: 700; }
+@media (min-width: 900px) {
+  #view-qa { grid-column: 2; grid-row: 1; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--bg); }
+  body[data-qa="1"][data-view="script"] #view-qa { display: flex; padding: 0; gap: 0; }
+  body[data-qa="1"][data-view="script"] #view-practice, body[data-qa="1"][data-view="saved"] #view-qa, body[data-qa="1"][data-view="settings"] #view-qa { display: none; }
+  .qa-question { font-size: 34px !important; }
+}

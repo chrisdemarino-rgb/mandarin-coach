@@ -87,6 +87,7 @@
             <select id="practiceMode" class="select">
               <option value="listen_repeat">Listen and repeat</option>
               <option value="fading_cues">Fading cues</option>
+              <option value="qa">Q&amp;A</option>
             </select>
           </div>
           <div>
@@ -306,6 +307,97 @@
           <button id="btnDrillRetry" class="btn" type="button">Retry</button>
           <button id="btnDrillSkip" class="btn" type="button">Skip</button>
           <button id="btnDrillFinish" class="btn danger" type="button">Finish</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== Q&A PRACTICE ========== -->
+    <section id="view-qa" class="view" aria-label="Q and A practice">
+      <div class="practice-scroll" id="qaScroll">
+        <div class="selects">
+          <div>
+            <label class="label" for="qaModeSelect">Practice mode</label>
+            <select id="qaModeSelect" class="select">
+              <option value="listen_repeat">Listen and repeat</option>
+              <option value="fading_cues">Fading cues</option>
+              <option value="qa">Q&amp;A</option>
+            </select>
+          </div>
+          <div>
+            <label class="label" for="chunkModeQa">Chunk size</label>
+            <select id="chunkModeQa" class="select js-chunk-mode"></select>
+          </div>
+        </div>
+        <div class="progress-wrap"><span id="qaProgress" class="muted">Q&amp;A practice</span></div>
+
+        <div id="qaIntro" class="card qa-intro" hidden>
+          <h2 id="qaIntroTitle">Q&amp;A practice</h2>
+          <p id="qaIntroText">I ask a question about your script, out loud and in writing. Answer in your own words: exact wording isn't required. I compare the meaning with the script and show which key points you covered and which you missed.</p>
+          <p id="qaNoScript" class="muted" hidden><strong>No script yet.</strong> Open the Script tab and paste one (or load the sample) first.</p>
+          <p class="muted">Hint reveals a little at a time. Show answer reveals the model answer; both are counted in the summary. I don't score tones here.</p>
+        </div>
+
+        <div id="qaCard" class="card cue qa-card" hidden>
+          <div class="row between"><span class="muted">Question <span id="qaNumber">1</span></span><button id="btnQaHear" class="chip" type="button">&#128266; Replay question</button></div>
+          <p id="qaQuestion" class="cue-text qa-question" lang="zh-CN"></p>
+          <p id="qaPinyin" class="drill-py" hidden></p>
+          <p id="qaNotice" class="notice" role="status" hidden></p>
+          <div id="qaHints" class="qa-hints" lang="zh-CN" hidden></div>
+          <div id="qaAnswer" class="qa-answer" hidden>
+            <div class="qa-answer-head"><strong>Model answer</strong> <span id="qaAnswerFrom" class="muted"></span></div>
+            <p id="qaAnswerText" lang="zh-CN"></p>
+            <button id="btnQaHearAnswer" class="chip" type="button">&#128266; Hear answer</button>
+            <p class="muted">Answer shown: this is counted in your summary.</p>
+          </div>
+          <div class="row gap wrap qa-help">
+            <button id="btnQaHint" class="btn" type="button">Hint</button>
+            <button id="btnQaAnswer" class="btn" type="button">Show answer</button>
+          </div>
+        </div>
+
+        <div id="qaStatus" class="card status" data-kind="idle">
+          <div class="st st-asking" hidden><span class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span class="st-title">Coach is asking</span><span class="muted">Listen, then tap Record to answer.</span></div>
+          <div class="st st-ready" hidden><span class="st-title">Your turn</span><span class="muted">Tap Record, answer out loud, then tap Done.</span></div>
+          <div class="st st-listening" hidden>
+            <div class="row gap center-v"><span class="rec-dot" aria-hidden="true"></span><span class="st-title rec">Recording</span><span id="qaTimer" class="timer" aria-hidden="true">0:00</span></div>
+            <span class="muted">Answer in your own words. Tap Done when finished.</span>
+          </div>
+          <div class="st st-processing" hidden><span class="spinner" aria-hidden="true"></span><span class="st-title" id="qaProcTitle">Checking your answer…</span><span class="muted">This takes a few seconds.</span></div>
+          <div class="st st-loading" hidden><span class="spinner" aria-hidden="true"></span><span class="st-title">Getting a question…</span></div>
+        </div>
+
+        <div id="qaError" class="card error" role="alert" hidden>
+          <p id="qaErrorText"></p>
+          <div class="row gap wrap">
+            <button id="btnQaErrRetry" class="btn primary" type="button">Try again</button>
+            <button id="btnQaErrSkip" class="btn" type="button">Skip this question</button>
+          </div>
+        </div>
+
+        <div id="qaResult" class="card result" hidden>
+          <div class="score-row">
+            <div id="qaBadge" class="score-badge" aria-hidden="true"></div>
+            <div><div id="qaVerdict" class="score-label"></div><div id="qaVerdictNote" class="muted"></div></div>
+          </div>
+          <div id="qaHeard" class="transcript"><h3 class="h3">What I heard</h3><p id="qaHeardText" lang="zh-CN"></p><p class="muted">This is only the speech-to-text transcript. It is not used as tone evidence.</p></div>
+          <div id="qaPointsWrap"><h3 class="h3">Key points</h3><ul id="qaPoints" class="idea-list" lang="zh-CN"></ul></div>
+          <div id="qaSourceWrap"><h3 class="h3">In your script</h3><p id="qaSource" class="qa-source" lang="zh-CN"></p></div>
+          <div id="qaCheck" class="notice qa-check" hidden></div>
+          <div id="qaSuggestWrap" hidden><h3 class="h3">Words you might want to practise</h3><ul id="qaSuggest" class="idea-list"></ul></div>
+          <div id="qaCoach" class="coach-lines" lang="zh-CN"></div>
+          <p id="qaUsed" class="muted" hidden></p>
+          <div class="row gap wrap"><button id="btnQaHearCoach" class="btn" type="button">&#128266; Hear coach again</button></div>
+          <p id="qaEngine" class="muted engine-tag" hidden></p>
+        </div>
+
+        <div id="qaSummary" class="card summary" hidden></div>
+      </div>
+      <div class="controlbar">
+        <button id="btnQaPrimary" class="btn primary big" type="button">Start</button>
+        <div class="ctl-row three">
+          <button id="btnQaRetry" class="btn" type="button">Retry</button>
+          <button id="btnQaSkip" class="btn" type="button">Skip</button>
+          <button id="btnQaFinish" class="btn danger" type="button">Finish</button>
         </div>
       </div>
     </section>

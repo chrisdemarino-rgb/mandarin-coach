@@ -11,10 +11,13 @@ import { initSaved } from "./ui/saved.js";
 import { createDrill } from "./drill.js";
 import { initDrillUI } from "./ui/drill.js";
 import { isPass } from "./assess.js";
+import { createQa } from "./qa.js";
+import { initQaUI } from "./ui/qa.js";
 
 const S = createSession();
 const D = createDrill(S);
-window.__coach = { S, D, api }; // debugging / tests
+const Q = createQa(S);
+window.__coach = { S, D, Q, api }; // debugging / tests
 const store = S.store;
 
 let peek = false, mockSeen = false, authed = false, booted = false;
@@ -23,9 +26,11 @@ let rafId = 0;
 
 /* ---------------- views ---------------- */
 function setView(v) {
+  if (v === "practice" && store.settings.qaMode) v = "qa";   // Q&A is a practice mode with its own screen
   if (v !== "drill" && document.body.dataset.view === "drill") D.leave();   // leaving the drill releases the mic and stops audio
+  if (v !== "qa" && document.body.dataset.view === "qa") Q.leave();         // same for Q&A
   document.body.dataset.view = v;
-  const tabView = v === "drill" ? "saved" : v;   // the drill lives under the Saved tab
+  const tabView = v === "drill" ? "saved" : v === "qa" ? "practice" : v;   // the drill lives under the Saved tab
   $$(".tab").forEach((t) => (t.getAttribute("data-view") === tabView ? t.setAttribute("aria-current", "page") : t.removeAttribute("aria-current")));
   if (v === "saved") { S.loadWords(); S.loadMissed(); }
 }
@@ -118,14 +123,22 @@ $$(".js-chunk-mode").forEach((sel) => {
   sel.value = store.settings.chunkMode;
   sel.addEventListener("change", () => S.setChunkMode(sel.value));
 });
-$("#practiceMode").value = store.settings.practiceMode;
-$("#practiceMode").addEventListener("change", (e) => S.setPracticeMode(e.target.value));
+const modeValue = () => (store.settings.qaMode ? "qa" : store.settings.practiceMode);
+function pickMode(v) {
+  if (v === "qa") { S.setQaMode(true); setView("qa"); }
+  else { const wasQa = !!store.settings.qaMode; S.setQaMode(false); S.setPracticeMode(v); if (wasQa) setView("practice"); }
+  syncModeSelects();
+}
+function syncModeSelects() { const v = modeValue(); ["#practiceMode", "#qaModeSelect"].forEach((id) => { if ($(id).value !== v) $(id).value = v; }); document.body.dataset.qa = store.settings.qaMode ? "1" : ""; }
+syncModeSelects();
+$("#practiceMode").addEventListener("change", (e) => pickMode(e.target.value));
+$("#qaModeSelect").addEventListener("change", (e) => pickMode(e.target.value));
 const f = { assess: $("#setAssess"), rate: $("#setRate"), rateOut: $("#setRateOut"), voice: $("#setVoice"), pinyin: $("#setPinyin"), fb: $("#setFeedback"), auto: $("#setAutoCoach") };
 function loadSettingsForm() {
   const s = store.settings;
   f.assess.value = s.assessMode; f.rate.value = s.speed; f.rateOut.textContent = Number(s.speed).toFixed(2);
   f.voice.value = s.voice || ""; f.pinyin.checked = s.showPinyin; f.fb.checked = s.showFeedback; f.auto.checked = s.autoCoach !== false;
-  $("#practiceMode").value = s.practiceMode;
+  syncModeSelects();
   $$(".js-chunk-mode").forEach((sel) => (sel.value = s.chunkMode));
 }
 f.assess.addEventListener("change", () => S.setAssessMode(f.assess.value));
@@ -147,6 +160,7 @@ $("#btnTestConn").addEventListener("click", async () => {
 const resultView = createResultView({ onSave: (w) => S.saveWord(w).then(() => toast(S.saveMsg)) });
 initSaved(S, { onDrill: (wordId) => { setView("drill"); D.start(wordId ? { wordId } : {}); } });   // D.start runs unlock+arm inside this tap
 initDrillUI(D, S, { onLeave: () => setView("saved") });
+initQaUI(Q, S, { onSave: (w) => S.saveWord(w).then(() => toast(S.saveMsg)), onLeave: () => { S.setQaMode(false); syncModeSelects(); setView("practice"); } });
 
 /* ---------------- controls ---------------- */
 const btn = { primary: $("#btnPrimary"), pause: $("#btnPause"), retry: $("#btnRetry"), skip: $("#btnSkip"), finish: $("#btnFinish") };
@@ -218,7 +232,7 @@ function render() {
   const pb = $("#progressBar"); pb.setAttribute("aria-valuenow", String(pct)); pb.firstElementChild.style.width = pct + "%";
 
   $$(".js-chunk-mode").forEach((sel) => { if (sel.value !== store.settings.chunkMode) sel.value = store.settings.chunkMode; });
-  if ($("#practiceMode").value !== store.settings.practiceMode) $("#practiceMode").value = store.settings.practiceMode;
+  syncModeSelects();
 
   $("#emptyScript").hidden = total > 0;
   $("#cueCard").hidden = !total || st === "finished";

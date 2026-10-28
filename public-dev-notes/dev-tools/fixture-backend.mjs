@@ -10,7 +10,7 @@ import http from "node:http";
 
 const LISTEN = Number(process.argv[2] || 8095), TARGET = Number(process.argv[3] || 8093);
 const NEEDED = 3;
-const mode = { attempt: "issues", drill: "correct", unsupported: false, retell: "" };   // retell: "" | "tone_flagged" | "tone_unflagged" | "legacy" (only touches basis:"transcript" assessments)
+const mode = { attempt: "issues", drill: "correct", unsupported: false, retell: "", qa: "missing", qaHints: "backend", qaAnswer: "assessment", qaUnsupported: false, qaTranscript: "" };   // retell: "" | "tone_flagged" | "tone_unflagged" | "legacy" (only touches basis:"transcript" assessments)
 let words = [];  // {id,text,pinyin,meaning,missCount,correctStreak,needed,lastMissedAt,sourceChunk,status}
 let seq = 0, attemptNo = 0, drillNo = 0;
 const seen = new Map();   // attemptId -> response body (replay)
@@ -36,6 +36,16 @@ function wordsOf(chunkText) {
     out.push({ start: i, end: j, text: cps.slice(i, j).join("") }); i = j;
   }
   return out;
+}
+/** Clauses of chunkText with >= 2 hanzi (code-point offsets, end exclusive; the trailing punctuation is excluded). */
+function clausesOf(chunkText) {
+  const cps = [...chunkText], out = []; let st = -1;
+  for (let i = 0; i <= cps.length; i++) {
+    const isHan = i < cps.length && HAN.test(cps[i]);
+    if (isHan && st < 0) st = i;
+    if (!isHan && st >= 0) { if (i - st >= 2) out.push({ start: st, end: i, text: cps.slice(st, i).join("") }); st = -1; }
+  }
+  return out.slice(0, 6);
 }
 function addMissed(text, sourceChunk) {
   let w = words.find((x) => x.text === text);
@@ -91,7 +101,7 @@ const server = http.createServer(async (req, res) => {
     if (p === "/__fixture/mode" && req.method === "POST") {
       const b = JSON.parse((await readBody(req)).toString() || "{}");
       if (b.reset) { words = []; seq = 0; attemptNo = 0; drillNo = 0; seen.clear(); }
-      for (const k of ["attempt", "drill", "unsupported", "retell"]) if (b[k] !== undefined) mode[k] = b[k];
+      for (const k of ["attempt", "drill", "unsupported", "retell", "qa", "qaHints", "qaAnswer", "qaUnsupported", "qaTranscript"]) if (b[k] !== undefined) mode[k] = b[k];
       if (Array.isArray(b.seed)) for (const t of b.seed) { const w = addMissed(t, `例句：${t}很重要。`); w.missCount = 2; }
       return json(res, 200, { mode, words: words.length });
     }
@@ -131,6 +141,63 @@ const server = http.createServer(async (req, res) => {
       seen.set(attemptId, body);
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
       await new Promise((r) => setTimeout(r, 400));
+      return res.end(body);
+    }
+
+
+    /* ---- Q&A: mirrors the Backend's working-tree shape (routes/qa.js, 28 Oct, uncommitted): stateless signed question, keyPoints with code-point offsets into chunks[0]. ---- */
+    if (p === "/api/qa/next" || p === "/api/qa/attempt") {
+      if (!(await authed(req))) return json(res, 401, { error: { code: "unauthorized", message: "Sign in required." } });
+      if (mode.qaUnsupported) return json(res, 404, { error: { code: "not_found", message: "Not found" } });
+    }
+    if (req.method === "POST" && p === "/api/qa/next") {
+      const b = JSON.parse((await readBody(req)).toString() || "{}");
+      const err = (st, code, message) => json(res, st, { ok: false, error: { code, message } });
+      if (mode.qa === "next_fail") return err(502, "question_generation_failed", "Could not produce a question with grounded key points (malformed_output). Try again.");
+      if (!Array.isArray(b.chunks) || !b.chunks.length) return err(400, "invalid_chunks", "chunks must be an array of 1-80 strings.");
+      const chunk = String(b.chunks[0]), cl = clausesOf(chunk);
+      if ([...chunk].filter((c) => HAN.test(c)).length < 6 || !cl.length) return err(400, "chunks_too_short", "No chunk has at least 6 Chinese characters to ask about.");
+      const c = cl[(b.avoid || []).length % cl.length], cps = [...chunk], half = Math.max(1, Math.floor((c.end - c.start) / 2));
+      const kp = (k, s0, e0) => ({ id: `k${k}`, textZh: cps.slice(s0, e0).join(""), refStart: s0, refEnd: e0, chunkIndex: 0 });
+      const keyPoints = [kp(1, c.start, c.start + half), ...(c.end - c.start - half >= 1 ? [kp(2, c.start + half, c.end)] : [])];
+      const hex = [...c.text].reduce((h, ch) => (h * 31 + ch.codePointAt(0)) >>> 0, 7).toString(16).padStart(8, "0") + String((b.avoid || []).length).padStart(4, "0");
+      const q = { questionId: `q${hex}`, type: "what", level: 1, questionZh: `原文里，关于“${c.text.slice(0, 2)}”说了什么？`, modelAnswerZh: c.text, hintZh: mode.qaHints === "none" ? "" : `想一想“${c.text.slice(0, 1)}”后面是什么。`, sourceChunkIndex: 0, keyPoints };
+      const out = { ok: true, ...q, signature: "fixture-signature", questionPinyin: pinyinOf(q.questionZh, false) };
+      if (!out.hintZh) delete out.hintZh;
+      return json(res, 200, out);
+    }
+    if (req.method === "POST" && p === "/api/qa/attempt") {
+      const buf = await readBody(req);
+      const attemptId = field(buf, "attemptId"), q = JSON.parse(field(buf, "question") || "null");
+      if (seen.has(attemptId)) { res.writeHead(200, { "Content-Type": "text/event-stream", "X-Attempt-Replayed": "true" }); return res.end(seen.get(attemptId)); }
+      const ev = (n, d) => `event: ${n}\ndata: ${JSON.stringify(d)}\n\n`;
+      let body;
+      if (!q || !Array.isArray(q.keyPoints)) body = ev("error", { code: "invalid_question", message: "question payload is incomplete or malformed.", retryable: false, stage: "assessment" });
+      else if (mode.qa === "no_speech") body = ev("status", { stage: "transcribing" }) + ev("error", { code: "no_speech_detected", message: "I couldn't hear Mandarin speech in that recording. Try again.", retryable: true, stage: "transcribing" });
+      else if (mode.qa === "error") body = ev("error", { code: "assessment_unavailable", message: "No assessment obtained: the answer check was unavailable (malformed_output) and no tone check was possible.", retryable: true, stage: "assessment" });
+      else if (mode.qa === "too_long") body = ev("status", { stage: "transcribing" }) + ev("error", { code: "qa_answer_too_long", message: "That answer is too long to check (over 300 characters heard). Answer in one or two sentences.", retryable: false, stage: "transcribing" });
+      else {
+        const transcript = mode.qaTranscript || "我觉得是这样的。";
+        const cov = { covered: [true, true], missing: [true, false], partial: [true, "partial"], wrong: [true, false], dont_know: [false, false] }[mode.qa] || [true, true];
+        const kps = q.keyPoints.map((k, i) => ({ ...k, covered: cov[i] === undefined ? true : cov[i], evidence: cov[i] === false ? null : "我说了这个意思", confidence: "high", ...(mode.qa === "wrong" && i === 1 ? { issue: "wrong_fact" } : {}) }));
+        const unavailable = mode.qa === "unavailable";
+        const answered = mode.qa !== "dont_know";
+        const wrongFacts = mode.qa === "wrong" ? [{ claimZh: "我觉得是别的", contradictsKeyPointId: "k2", confidence: "high" }] : [];
+        const missing = kps.filter((x) => x.covered === false);
+        const full = !unavailable && answered && kps.every((x) => x.covered === true);
+        const qa = unavailable
+          ? { questionId: q.questionId, transcript, sttStatus: "ok", tone: { status: "skipped" }, modelAnswerZh: q.modelAnswerZh, keyPoints: q.keyPoints.map((k) => ({ ...k, covered: null, evidence: null, confidence: null })), coveredCount: 0, totalCount: q.keyPoints.length, partialCount: 0, wrongFacts: [], answeredQuestion: null, answerKind: null, canPraise: false, praiseLevel: "none", comparisonStatus: "unavailable", comparisonReason: "malformed_output", missingKeyPointIds: [], suggestedWords: [] }
+          : { questionId: q.questionId, transcript, sttStatus: "ok", tone: { status: "skipped", reason: "transcript_has_digits_or_latin" }, modelAnswerZh: q.modelAnswerZh, keyPoints: kps, coveredCount: kps.filter((x) => x.covered === true).length, totalCount: kps.length, partialCount: kps.filter((x) => x.covered === "partial").length, wrongFacts, answeredQuestion: answered, answerKind: answered ? "answered" : "dont_know", canPraise: full, praiseLevel: full ? "full" : missing.length || !answered ? "none" : "soft", comparisonStatus: "ok", comparisonReason: null, missingKeyPointIds: missing.map((x) => x.id), suggestedWords: missing.slice(0, 1).map((k) => ({ text: [...k.textZh].slice(0, 2).join(""), pinyin: pinyinOf([...k.textZh].slice(0, 2).join(""), false), meaning: null, keyPointId: k.id })) };
+        const lines = unavailable ? ["这次没能检查你的回答。", "再试一次，或者下一个问题。"] : !answered ? ["没关系，这个问题还没答出来。", "想要提示，就点提示；也可以再试一次。"] : full ? ["回答得很好，要点都讲到了。", "来下一个问题吧。"] : ["有一个要点没讲到。", `漏掉了这个要点：${(missing[0] || kps[1] || kps[0]).textZh}`, "再试一次，或者下一个问题。"];
+        body = ev("status", { stage: "transcribing" }) + ev("status", { stage: "assessing", detail: "answer" })
+          + ev("assessment", { status: "ok", engine: "mock", mock: true, lowConfidence: true, basis: "transcript", transcript, transcriptDerived: true, qa })
+          + ev("status", { stage: "coaching" })
+          + lines.map((t, k) => ev("coach_text", { delta: t, index: k, role: k === 0 ? "opener" : "coach" })).join("")
+          + ev("done", { summary: { comparisonStatus: qa.comparisonStatus }, timings: { totalMs: 5 } });
+      }
+      seen.set(attemptId, body);
+      res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
+      await new Promise((r) => setTimeout(r, 500));
       return res.end(body);
     }
 

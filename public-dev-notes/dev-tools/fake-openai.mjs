@@ -21,6 +21,24 @@ const port = Number(process.argv[2] || process.env.FAKE_OPENAI_PORT || 8094);
 //   language: add a "language" correction quoting the transcript. Only used for the retell meaning comparison (system prompt "compare the MEANING").
 const ctl = { transcript: process.env.FAKE_TRANSCRIPT || "", ideas: process.env.FAKE_IDEAS || "", language: false, llmFail: false };
 const HZ = /[\u3400-\u9fff]/;
+// Q&A (real server qa.js prompts). ctl.qa = one letter per key point for the answer check: c covered, p partial, m missing, w missing + wrongFact; ctl.qaAnswered:false = off-topic/don't know.
+ctl.qa = ""; ctl.qaAnswered = true;
+const QTEXT = ["这段话讲了什么？", "他们是怎么做的？", "原文还说了什么？", "这里提到了什么事？"];
+function qaQuestionJson(userJ) {
+  const passage = String(userJ.passage || ""), avoid = userJ.avoid || [];
+  const clauses = passage.split(/[，。！？；、,.!?;\s]+/).filter((c) => [...c].filter((x) => HZ.test(x)).length >= 2);
+  const n = clauses.length, i0 = (avoid.length * 2) % Math.max(1, n);
+  const kp = [clauses[i0], clauses[(i0 + 1) % n]].filter((x, k, a) => x && a.indexOf(x) === k);
+  return { type: "what", questionZh: QTEXT[avoid.length % QTEXT.length], keyPoints: kp.map((q) => ({ refQuote: q })), modelAnswerZh: kp.join("，"), hintZh: "想一想这段话的开头。" };
+}
+function qaCheckJson(userJ) {
+  const kps = userJ.keyPoints || [], tr = String(userJ.transcript || "");
+  const codes = (ctl.qa || "c".repeat(kps.length)).split("");
+  const ev = [...tr].filter((x) => HZ.test(x)).slice(0, 3).join("");
+  const wrongFacts = [];
+  const keyPoints = kps.map((k, i) => { const c = codes[i] || "c"; if (c === "w" && ev.length >= 2) wrongFacts.push({ claim: ev, contradicts: k.id, confidence: "high" }); return { id: k.id, covered: c === "c" ? true : c === "p" ? "partial" : false, evidence: c === "m" || c === "w" || !ev ? null : ev, confidence: "high" }; });
+  return { answeredQuestion: ctl.qaAnswered !== false, keyPoints, wrongFacts };
+}
 function compareJson(sys, userJ) {
   const ref = String(userJ.reference || ""), tr = String(userJ.transcript || "");
   const clauses = ref.split(/[，。！？；、,.!?;\s]+/).filter((c) => [...c].filter((x) => HZ.test(x)).length >= 2).slice(0, 4);
@@ -41,7 +59,9 @@ http.createServer(async (req, res) => {
     if (ctl.llmFail) { res.writeHead(500, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ error: { message: "fake llm down" } })); }
     const sys = j.messages?.[0]?.content || "";
     let content;
-    if (/ONE Chinese word/.test(sys)) content = JSON.stringify({ hint: "生活" });
+    if (/ONE spoken comprehension question/.test(sys)) { let u = {}; try { u = JSON.parse(j.messages[1].content); } catch { /* ignore */ } content = JSON.stringify(qaQuestionJson(u)); }
+    else if (/You check a Mandarin learner's spoken ANSWER/.test(sys)) { let u = {}; try { u = JSON.parse(j.messages[1].content); } catch { /* ignore */ } content = JSON.stringify(qaCheckJson(u)); }
+    else if (/ONE Chinese word/.test(sys)) content = JSON.stringify({ hint: "生活" });
     else if (/compare the MEANING/.test(sys)) { let u = {}; try { u = JSON.parse(j.messages[1].content); } catch { /* ignore */ } content = JSON.stringify(compareJson(sys, u)); }
     else {
       let facts = { confirmedToneErrors: [], uncertain: [] };

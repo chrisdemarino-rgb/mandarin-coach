@@ -56,6 +56,7 @@ export function createSession() {
     get state() { return machine.state; },
     get settings() { return store.settings; },
     get practiceMode() { return store.settings.practiceMode; },
+    get qaMode() { return !!store.settings.qaMode; },
     get retell() { return store.settings.assessMode === "retell"; },
     /** Fading-cue flow (key-word prompts from /api/cues, text hidden): chosen as the practice mode, and always used for retelling. */
     get cueFlow() { return store.settings.practiceMode === "fading_cues" || store.settings.assessMode === "retell"; },
@@ -128,6 +129,16 @@ export function createSession() {
     S.emit();
   };
 
+  /** Q&A is a Practice mode: the server pref practiceMode stores "qa" (accepted since d236b1c) so it syncs across devices, but the LOCAL practiceMode stays the real
+   *  listen_repeat|fading_cues value (what /api/attempt is sent), and qaMode is the local flag. Leaving Q&A pushes the real value back. If a server rejects 'qa' the local choice still works. */
+  S.setQaMode = (on) => {
+    on = !!on;
+    if (!!store.settings.qaMode === on) return;
+    if (on && S.sessionActive && machine.state !== "paused") S.pause("Paused for Q&A. Tap Resume to carry on with your script.");
+    store.setSettings({ qaMode: on }, true);
+    S.pushPrefs({ practiceMode: on ? "qa" : store.settings.practiceMode });
+    S.emit();
+  };
   S.setPracticeMode = (mode) => {
     if (store.settings.practiceMode === mode) return;
     store.setSettings({ practiceMode: mode }, true);
@@ -163,6 +174,8 @@ export function createSession() {
     if (!p) return;
     const patch = {};
     for (const k of ["chunkMode", "assessMode", "practiceMode", "voice", "speed"]) if (p[k] !== undefined && p[k] !== null) patch[k] = p[k];
+    if (patch.practiceMode === "qa") { delete patch.practiceMode; patch.qaMode = true; }   // never let "qa" become the practiceMode that /api/attempt is sent
+    else if (patch.practiceMode !== undefined) patch.qaMode = false;
     store.setSettings(patch, true);
     if (S.parsed) S.rebuild(S.chunk ? S.chunk.sentenceStart : store.progress.sentenceIndex || 0);
   };

@@ -15,6 +15,8 @@ import { deriveFacts } from '../engines/assessment/index.js';
 import { analyzeWords, emptyWordFacts } from '../engines/assessment/words.js';
 import { runCoach, splitSentences, hanzi, wordCorrection, planCorrections, factCorrection, GATE_PHRASE_ZH, FIXED_PHRASES_ZH, DRILL_OK_ZH, DRILL_RETRY_ZH } from '../services/coach.js';
 import { compareMeaning, buildRetellBlock, toSimplified, planRetellCoach, RT_GATE_ZH, RETELL_PHRASES_ZH } from '../services/retell.js';
+import { QA_PHRASES_ZH } from '../services/qa.js';
+import { qaRoutes } from './qa.js';
 import { saveMissed, fillGlosses, drillTarget } from '../lib/missed.js';
 import { rateLimit } from '../lib/ratelimit.js';
 import { log } from '../config.js';
@@ -29,7 +31,7 @@ export const needsTranscript = () => true;
 
 const publicCorrection = (c) => ({ kind: c.kind, targetText: c.targetText, explanationZh: c.explanationZh, modelText: c.modelText, factRef: c.factRef, source: c.source,
   ...(c.start !== undefined ? { start: c.start, end: c.end } : {}), ...(c.pinyin ? { pinyin: c.pinyin } : {}), ...(c.meaning !== undefined ? { meaning: c.meaning } : {}),
-  ...(c.heard ? { heard: c.heard } : {}), ...(c.ideaId ? { ideaId: c.ideaId } : {}), ...(c.evidence ? { evidence: c.evidence } : {}) });
+  ...(c.heard ? { heard: c.heard } : {}), ...(c.ideaId ? { ideaId: c.ideaId } : {}), ...(c.keyPointId ? { keyPointId: c.keyPointId, chunkIndex: c.chunkIndex } : {}), ...(c.evidence ? { evidence: c.evidence } : {}) });
 
 export function attemptRouter({ cfg, engine, services, db }) {
   const r = Router();
@@ -132,7 +134,7 @@ export function attemptRouter({ cfg, engine, services, db }) {
     return { unit, done: () => chain };
   }
 
-  const warmTts = (b) => { services.tts.warm?.({ phrases: [...FIXED_PHRASES_ZH, ...RETELL_PHRASES_ZH], voice: b.voice, speed: Number(b.speed) || undefined })?.catch?.(() => {}); };
+  const warmTts = (b) => { services.tts.warm?.({ phrases: [...FIXED_PHRASES_ZH, ...RETELL_PHRASES_ZH, ...QA_PHRASES_ZH], voice: b.voice, speed: Number(b.speed) || undefined })?.catch?.(() => {}); };
   const meaningOf = (text) => db.getMissedByText(text)?.meaning ?? null;
 
   /** Word analysis + facts + auto-save. */
@@ -358,5 +360,6 @@ export function attemptRouter({ cfg, engine, services, db }) {
     send('done', { correct, counted, correctStreak: after.correctStreak, needed, graduated, wordId: word.id, ...(gated ? { reason: 'low_match' } : {}), corrections: out.correction ? [publicCorrection(out.correction)] : [], timings: { ...timings } });
   }
 
+  qaRoutes(r, { cfg, engine, services, db, bad, stamp, stream, speaker, warmTts, meaningOf, publicCorrection, ID_RE });
   return r;
 }

@@ -1,0 +1,221 @@
+{
+ "note": "raw gpt answer-check JSON for TTS learner answers (scripts/qa-real-check.js); replayed through validateCheck in tests",
+ "items": [
+  {
+   "name": "good",
+   "question": {
+    "keyPoints": [
+     {
+      "id": "k1",
+      "textZh": "回家踢足球",
+      "refStart": 9,
+      "refEnd": 14,
+      "chunkIndex": 2
+     },
+     {
+      "id": "k2",
+      "textZh": "晚上他和妈妈一起做饭",
+      "refStart": 24,
+      "refEnd": 34,
+      "chunkIndex": 2
+     }
+    ],
+    "questionZh": "小明放学后怎么安排时间？",
+    "modelAnswerZh": "他放学后先踢足球，晚上和妈妈做饭。"
+   },
+   "transcript": "他放学后踢足球，晚上做饭。",
+   "llmRaw": {
+    "answeredQuestion": true,
+    "keyPoints": [
+     {
+      "id": "k1",
+      "covered": true,
+      "evidence": "他放学后踢足球",
+      "confidence": "high"
+     },
+     {
+      "id": "k2",
+      "covered": true,
+      "evidence": "晚上做饭",
+      "confidence": "medium"
+     }
+    ],
+    "wrongFacts": []
+   }
+  },
+  {
+   "name": "partial",
+   "question": {
+    "keyPoints": [
+     {
+      "id": "k1",
+      "textZh": "回家踢足球",
+      "refStart": 9,
+      "refEnd": 14,
+      "chunkIndex": 2
+     },
+     {
+      "id": "k2",
+      "textZh": "晚上他和妈妈一起做饭",
+      "refStart": 24,
+      "refEnd": 34,
+      "chunkIndex": 2
+     }
+    ],
+    "questionZh": "小明放学后怎么安排时间？",
+    "modelAnswerZh": "他放学后先踢足球，晚上和妈妈做饭。"
+   },
+   "transcript": "他放学后回家踢足球。",
+   "llmRaw": {
+    "answeredQuestion": true,
+    "keyPoints": [
+     {
+      "id": "k1",
+      "covered": true,
+      "evidence": "他放学后回家踢足球",
+      "confidence": "high"
+     },
+     {
+      "id": "k2",
+      "covered": false,
+      "evidence": null,
+      "confidence": "high"
+     }
+    ],
+    "wrongFacts": []
+   }
+  },
+  {
+   "name": "wrong",
+   "question": {
+    "keyPoints": [
+     {
+      "id": "k1",
+      "textZh": "回家踢足球",
+      "refStart": 9,
+      "refEnd": 14,
+      "chunkIndex": 2
+     },
+     {
+      "id": "k2",
+      "textZh": "晚上他和妈妈一起做饭",
+      "refStart": 24,
+      "refEnd": 34,
+      "chunkIndex": 2
+     }
+    ],
+    "questionZh": "小明放学后怎么安排时间？",
+    "modelAnswerZh": "他放学后先踢足球，晚上和妈妈做饭。"
+   },
+   "transcript": "他放学后去图书馆学习，晚上和妈妈做饭。",
+   "llmRaw": {
+    "answeredQuestion": true,
+    "keyPoints": [
+     {
+      "id": "k1",
+      "covered": false,
+      "evidence": null,
+      "confidence": "high"
+     },
+     {
+      "id": "k2",
+      "covered": true,
+      "evidence": "晚上和妈妈做饭",
+      "confidence": "high"
+     }
+    ],
+    "wrongFacts": [
+     {
+      "claim": "他放学后去图书馆学习",
+      "contradicts": "k1",
+      "confidence": "high"
+     }
+    ]
+   }
+  },
+  {
+   "name": "offtopic",
+   "question": {
+    "keyPoints": [
+     {
+      "id": "k1",
+      "textZh": "回家踢足球",
+      "refStart": 9,
+      "refEnd": 14,
+      "chunkIndex": 2
+     },
+     {
+      "id": "k2",
+      "textZh": "晚上他和妈妈一起做饭",
+      "refStart": 24,
+      "refEnd": 34,
+      "chunkIndex": 2
+     }
+    ],
+    "questionZh": "小明放学后怎么安排时间？",
+    "modelAnswerZh": "他放学后先踢足球，晚上和妈妈做饭。"
+   },
+   "transcript": "我喜欢吃苹果和香蕉。",
+   "llmRaw": {
+    "answeredQuestion": true,
+    "keyPoints": [
+     {
+      "id": "k1",
+      "covered": false,
+      "evidence": null,
+      "confidence": "high"
+     },
+     {
+      "id": "k2",
+      "covered": false,
+      "evidence": null,
+      "confidence": "high"
+     }
+    ],
+    "wrongFacts": []
+   }
+  },
+  {
+   "name": "dont_know",
+   "question": {
+    "keyPoints": [
+     {
+      "id": "k1",
+      "textZh": "回家踢足球",
+      "refStart": 9,
+      "refEnd": 14,
+      "chunkIndex": 2
+     },
+     {
+      "id": "k2",
+      "textZh": "晚上他和妈妈一起做饭",
+      "refStart": 24,
+      "refEnd": 34,
+      "chunkIndex": 2
+     }
+    ],
+    "questionZh": "小明放学后怎么安排时间？",
+    "modelAnswerZh": "他放学后先踢足球，晚上和妈妈做饭。"
+   },
+   "transcript": "我不知道，我不太清楚这个问题。",
+   "llmRaw": {
+    "answeredQuestion": false,
+    "keyPoints": [
+     {
+      "id": "k1",
+      "covered": false,
+      "evidence": null,
+      "confidence": "high"
+     },
+     {
+      "id": "k2",
+      "covered": false,
+      "evidence": null,
+      "confidence": "high"
+     }
+    ],
+    "wrongFacts": []
+   }
+  }
+ ]
+}

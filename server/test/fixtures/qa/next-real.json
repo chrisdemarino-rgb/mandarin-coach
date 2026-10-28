@@ -1,0 +1,127 @@
+{
+ "note": "raw gpt question JSON for CHUNKS (scripts/qa-real-check.js); replayed through validateNext in tests",
+ "chunks": [
+  "小明每天早上六点半起床，因为学校离家很远。他骑自行车去学校，路上要二十分钟。",
+  "他的老师姓王，是一位很和气的女老师。她教小明数学，下课以后常常帮同学解答问题。",
+  "下午放学以后，小明回家踢足球，因为他最喜欢足球。晚上他和妈妈一起做饭。"
+ ],
+ "items": [
+  {
+   "chunk": "小明每天早上六点半起床，因为学校离家很远。他骑自行车去学校，路上要二十分钟。",
+   "chunkIndex": 0,
+   "preferredType": null,
+   "avoidCount": 0,
+   "llmRaw": {
+    "type": "what",
+    "questionZh": "小明为什么早上六点半起床？",
+    "keyPoints": [
+     {
+      "refQuote": "学校离家很远"
+     }
+    ],
+    "modelAnswerZh": "因为学校离家很远。",
+    "hintZh": "想想小明起床的原因。"
+   },
+   "resultType": "what",
+   "resultQuestionId": "q34932fca4687"
+  },
+  {
+   "chunk": "下午放学以后，小明回家踢足球，因为他最喜欢足球。晚上他和妈妈一起做饭。",
+   "chunkIndex": 2,
+   "preferredType": null,
+   "avoidCount": 1,
+   "llmRaw": {
+    "type": "why",
+    "questionZh": "小明为什么放学后踢足球？",
+    "keyPoints": [
+     {
+      "refQuote": "他最喜欢足球"
+     }
+    ],
+    "modelAnswerZh": "因为他最喜欢足球。",
+    "hintZh": "想想小明喜欢什么运动"
+   },
+   "resultType": "why",
+   "resultQuestionId": "qf1f0a11fac4e"
+  },
+  {
+   "chunk": "下午放学以后，小明回家踢足球，因为他最喜欢足球。晚上他和妈妈一起做饭。",
+   "chunkIndex": 2,
+   "preferredType": null,
+   "avoidCount": 2,
+   "llmRaw": {
+    "type": "how",
+    "questionZh": "小明放学后怎么安排时间？",
+    "keyPoints": [
+     {
+      "refQuote": "回家踢足球"
+     },
+     {
+      "refQuote": "晚上他和妈妈一起做饭"
+     }
+    ],
+    "modelAnswerZh": "他放学后先踢足球，晚上和妈妈做饭。",
+    "hintZh": "看看放学后的活动顺序。"
+   },
+   "resultType": "how",
+   "resultQuestionId": "qc0b9f15c685b"
+  },
+  {
+   "chunk": "小明每天早上六点半起床，因为学校离家很远。他骑自行车去学校，路上要二十分钟。",
+   "chunkIndex": 0,
+   "preferredType": null,
+   "avoidCount": 3,
+   "llmRaw": {
+    "type": "who",
+    "questionZh": "谁每天早上六点半起床？",
+    "keyPoints": [
+     {
+      "refQuote": "小明每天早上六点半起床"
+     }
+    ],
+    "modelAnswerZh": "小明每天早上六点半起床。",
+    "hintZh": "看第一句关于起床的人是谁"
+   },
+   "resultType": "who",
+   "resultQuestionId": "q7e84dcb62d7b"
+  },
+  {
+   "chunk": "他的老师姓王，是一位很和气的女老师。她教小明数学，下课以后常常帮同学解答问题。",
+   "chunkIndex": 1,
+   "preferredType": null,
+   "avoidCount": 4,
+   "llmRaw": {
+    "type": "what",
+    "questionZh": "老师下课后做什么？",
+    "keyPoints": [
+     {
+      "refQuote": "下课以后常常帮同学解答问题"
+     }
+    ],
+    "modelAnswerZh": "老师下课以后常常帮同学解答问题。",
+    "hintZh": "注意老师下课后的活动"
+   },
+   "resultType": "what",
+   "resultQuestionId": "qf7c1cd670a8e"
+  },
+  {
+   "chunk": "小明每天早上六点半起床，因为学校离家很远。他骑自行车去学校，路上要二十分钟。",
+   "chunkIndex": 0,
+   "preferredType": null,
+   "avoidCount": 5,
+   "llmRaw": {
+    "type": "why",
+    "questionZh": "小明为什么早上六点半起床？",
+    "keyPoints": [
+     {
+      "refQuote": "学校离家很远"
+     }
+    ],
+    "modelAnswerZh": "因为学校离家很远，所以他早起。",
+    "hintZh": "想想小明家离哪里"
+   },
+   "resultType": "why",
+   "resultQuestionId": "q34932fca4687"
+  }
+ ]
+}

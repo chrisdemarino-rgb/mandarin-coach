@@ -207,3 +207,226 @@ The acoustic reference is the **transcript** (hanzi only, simplified), `lowConfi
 
 ### Validation of LLM text (retell)
 `wrong_meaning`/`language` corrections must quote the transcript (verified); `wrong_meaning` needs a non-covered idea; explanations containing tone talk or praise are replaced by a fixed line (`source:"server_fact"`); `modelText` must be grounded (<= 15% characters not in the reference/function words, no latin/digits, no tone talk) else the reference span is used instead; the LLM `summary` is spoken only when `canPraise` and contains no negative words.
+
+
+# Q&A practice mode (added 2026-10-28)
+
+The coach asks a spoken Mandarin question about the script; the learner answers freely by voice; the answer is checked against the **script text only**. **Stateless**: nothing is stored (no question, transcript, audio, conversation); a question is a *signed payload* the client keeps and sends back. All routes need the login cookie (401 otherwise). Prefs: `practiceMode` now also accepts `"qa"` (`PUT /api/prefs`); `POST /api/attempt` itself still only takes `listen_repeat|fading_cues` (Q&A has its own endpoints). Code: `server/services/qa.js`, `server/routes/qa.js`, `server/lib/qa-sign.js`.
+
+Flow: `POST /api/qa/next` -> speak `questionZh` (client calls `POST /api/tts`, or use `?audio=1`) -> record -> `POST /api/qa/attempt` (SSE) -> on a miss the client may call `/api/qa/hint` (level 1, then 2) or `/api/qa/answer`, retry the same question (send the same question payload with a NEW `attemptId`) or call `/next` again with `avoid`.
+
+## POST /api/qa/next   (JSON)
+```
+{ "chunks": ["小明放学后回家踢足球。晚上他和妈妈一起做饭。"],   // required, 1-80 strings, already stripped of [stage directions]; a chunk needs >= 6 hanzi to be asked about
+  "type": "what|why|how|who|any",     // optional (default any). any = the server rotates what->why->how->who by how many questions the client already asked (avoid.length); the LLM may switch if the text cannot support the type; the RETURNED type is the type actually asked
+  "level": 1,                         // optional: 1 = one stated fact (default), 2 = a reason / a link between two stated facts
+  "avoid": ["qc0b9f15c685b", "小明为什么早上六点半起床？"],   // optional, <= 40 entries (ids and/or question TEXTS, <= 120 chars). Send the question TEXTS (and ids): only texts reach the LLM so it can pick a different fact; ids give an exact-duplicate check. The server keeps no memory.
+  "chunkIndex": 0 }                   // optional: force which chunk to ask about (default: random among the eligible chunks)
+```
+`?audio=1[&voice=..&speed=..]` additionally synthesises the question (OpenAI TTS via the shared TTS cache) and returns `questionAudio:{url}` (the url is valid ~5 min like all `/api/audio/*`); if TTS fails the field is simply absent (use `POST /api/tts`). Default: no audio (keeps `/next` ~1-2 s).
+
+Response (the whole object minus `ok`, `questionPinyin`, `questionAudio`, `timings`, `repeated` must be sent back unchanged as `question`; extra fields are ignored, **unsigned**: `questionPinyin`, `questionAudio`, `timings`, `ok`, `repeated`):
+```json
+{
+ "ok": true,
+ "questionId": "qc0b9f15c685b",
+ "type": "how",
+ "level": 1,
+ "questionZh": "小明放学后怎么安排时间？",
+ "keyPoints": [
+  {
+   "id": "k1",
+   "textZh": "回家踢足球",
+   "refStart": 5,
+   "refEnd": 10,
+   "chunkIndex": 0
+  },
+  {
+   "id": "k2",
+   "textZh": "晚上他和妈妈一起做饭",
+   "refStart": 11,
+   "refEnd": 21,
+   "chunkIndex": 0
+  }
+ ],
+ "modelAnswerZh": "他放学后先踢足球，晚上和妈妈做饭。",
+ "hintZh": "看看放学后的活动顺序。",
+ "sourceChunkIndex": 0,
+ "signature": "IBC0CcPXRuKijqkjQSPM-0EDb4u21XmJ1kuISOhgGEk",
+ "questionPinyin": "xiǎo míng fàng xué hòu zěn me ān pái shí jiān？",
+ "questionAudio": {
+  "url": "/api/audio/ac8b5e8f198fdfa19bb7a3be.mp3"
+ },
+ "timings": {
+  "generateMs": 5,
+  "llmAttempts": 1,
+  "audioMs": 6,
+  "totalMs": 24
+ }
+}
+```
+- `keyPoints`: 1-3 short ideas an answer must contain. `textZh` is the exact reference text; `refStart/refEnd` are **code-point** offsets into chunk `chunkIndex` (== the `chunks[]` index you sent) **resolved by the server** (the LLM only quotes; unresolvable/invented quotes are dropped; spans never cross a sentence end). Highlight with `Array.from(chunk).slice(refStart, refEnd)`.
+- `questionId` is deterministic (`q` + hash of question + key points): the same question gets the same id. `signature` = HMAC-SHA256 (key derived from `SESSION_SECRET`/`APP_PASSCODE`) over `questionId, type, level, questionZh, modelAnswerZh, hintZh, sourceChunkIndex, keyPoints[id,textZh,refStart,refEnd,chunkIndex]` — a changed or foreign payload gets `400 invalid_question_signature`; a malformed one `400 invalid_question`. Ids/signatures stay valid across restarts as long as the secret is unchanged; changing `APP_PASSCODE`/`SESSION_SECRET` invalidates all in-flight questions (ask for a new one).
+- `repeated:true` (only then present): the model could not find a question different from `avoid` after one retry; show it or call `/next` again.
+- Errors: `400 invalid_chunks|stage_directions_in_chunk|chunks_too_short|invalid_type|invalid_level|invalid_avoid|invalid_chunk_index`, `413 script_too_long` (> 2000 hanzi in total), `503 llm_not_configured`, **`502 question_generation_failed`** (no question with a grounded key point after 2 LLM tries; message names the reason: `no_grounded_key_point|malformed_output|...`; just retry).
+
+## POST /api/qa/hint   (JSON: the question payload, optional `"hintLevel": 1|2`; no LLM)
+```
+{"ok":true,"questionId":"qc0b9f15c685b","hintZh":"看看放学后的活动顺序。","level":1,"hasMore":true}
+{"ok":true,"questionId":"qc0b9f15c685b","hintZh":"答案是这样开头的：回家……","level":2,"hasMore":false}
+```
+Level 1 = the signed hint (does not contain the answer words); level 2 = code-built: the first half of the first key point. Speak either via `POST /api/tts`. (`hintLevel`, not `level`: `level` is part of the signed question.) `400 invalid_hint_level|invalid_question|invalid_question_signature`.
+
+## POST /api/qa/answer   (JSON: the question payload; no LLM)
+```json
+{
+ "ok": true,
+ "questionId": "qc0b9f15c685b",
+ "modelAnswerZh": "他放学后先踢足球，晚上和妈妈做饭。",
+ "sourceChunkIndex": 0,
+ "keyPoints": [
+  {
+   "id": "k1",
+   "textZh": "回家踢足球",
+   "refStart": 5,
+   "refEnd": 10,
+   "chunkIndex": 0
+  },
+  {
+   "id": "k2",
+   "textZh": "晚上他和妈妈一起做饭",
+   "refStart": 11,
+   "refEnd": 21,
+   "chunkIndex": 0
+  }
+ ],
+ "suggestedWords": [
+  {
+   "text": "回家",
+   "pinyin": "huí jiā",
+   "meaning": null,
+   "keyPointId": "k1"
+  },
+  {
+   "text": "足球",
+   "pinyin": "zú qiú",
+   "meaning": null,
+   "keyPointId": "k1"
+  },
+  {
+   "text": "晚上",
+   "pinyin": "wǎn shàng",
+   "meaning": null,
+   "keyPointId": "k2"
+  },
+  {
+   "text": "妈妈",
+   "pinyin": "mā ma",
+   "meaning": null,
+   "keyPointId": "k2"
+  }
+ ]
+}
+```
+`suggestedWords` = vocabulary of the key points (same builder as retell), **never auto-saved**.
+
+## POST /api/qa/attempt   (multipart -> SSE, same plumbing as `/api/attempt`)
+Fields: `audio` (file, <= 10 MB), `question` (**string**: the JSON payload from `/next`, <= 16 KB), `attemptId` (8-100 chars; **idempotent replay** within 10 min exactly like `/api/attempt`; use a new id for every recording, also for a retry of the same question), optional `voice`, `speed` (coach TTS). `source:"tts"` audio is rejected. Errors before the stream: `400 missing_audio|invalid_question|invalid_question_signature|invalid_attempt_id|tts_audio_rejected`, `413 upload_too_large|question_too_large`, `409 attempt_in_progress`, `429`.
+
+Events: `status*`, `assessment | error`, `status(coaching)`, `coach_text*`, `coach_audio*`, `done` (same names/semantics as `/api/attempt`; `coach_text` payload is `{delta,index,role,caption?,start?,end?}`).
+Pipeline: STT (no reference in the prompt, normalised to simplified) -> **LLM answer check** (`QA_MODEL`, temp 0, strict JSON, 1 retry) in parallel with the optional **TonePerfect** check of the transcript (same policy as retell: `lowConfidence:true`, skipped when the transcript has digits/latin or > 100 hanzi, waits at most `QA_TONE_WAIT_MS=3000`, skipped silently with a reason otherwise). The LLM sees ONLY the signed key points + model answer + transcript; it returns per key point `covered true|"partial"|false` + `evidence` + `confidence`, `wrongFacts[{claim,contradicts,confidence}]`, `answeredQuestion`. **CODE** then verifies: evidence and wrong-fact quotes must really be in the transcript (pinyin-level, trad/simp tolerant; otherwise `covered` is demoted to `partial`/`low` and the claim dropped), a wrong fact needs a non-low confidence, an existing key point id and may not contradict a covered key point (max 2), all signed key point ids must be present, and an answer sharing no words with the question/key points (or "I don't know") is `off_topic`/`dont_know` even if the model said "answered". Counts, `canPraise`, `praiseLevel` are computed by code; every spoken line is code-built (the LLM never writes coaching text, never gives offsets).
+
+`assessment` event: the usual fields of the retell assessment (`basis:"transcript"`, `referenceText` = the transcript's hanzi, `transcript`, `facts`, `wordStatus:[]`, `savedMissed:[]`, `lowConfidence:true`, + TonePerfect fields when tone ran) **plus `qa`** (real output; here key point 2 is missed):
+```json
+{
+ "questionId": "qc0b9f15c685b",
+ "transcript": "他放学后踢足球。",
+ "sttStatus": "ok",
+ "tone": {
+  "status": "ok"
+ },
+ "modelAnswerZh": "他放学后先踢足球，晚上和妈妈做饭。",
+ "keyPoints": [
+  {
+   "id": "k1",
+   "textZh": "回家踢足球",
+   "refStart": 5,
+   "refEnd": 10,
+   "chunkIndex": 0,
+   "covered": true,
+   "evidence": "放学后踢足球",
+   "confidence": "high"
+  },
+  {
+   "id": "k2",
+   "textZh": "晚上他和妈妈一起做饭",
+   "refStart": 11,
+   "refEnd": 21,
+   "chunkIndex": 0,
+   "covered": false,
+   "evidence": null,
+   "confidence": "high"
+  }
+ ],
+ "coveredCount": 1,
+ "totalCount": 2,
+ "partialCount": 0,
+ "wrongFacts": [],
+ "answeredQuestion": true,
+ "answerKind": "answered",
+ "canPraise": false,
+ "praiseLevel": "none",
+ "comparisonStatus": "ok",
+ "missingKeyPointIds": [
+  "k2"
+ ],
+ "suggestedWords": [
+  {
+   "text": "晚上",
+   "pinyin": "wǎn shàng",
+   "meaning": null,
+   "keyPointId": "k2"
+  },
+  {
+   "text": "妈妈",
+   "pinyin": "mā ma",
+   "meaning": null,
+   "keyPointId": "k2"
+  },
+  {
+   "text": "一起",
+   "pinyin": "yì qǐ",
+   "meaning": null,
+   "keyPointId": "k2"
+  },
+  {
+   "text": "做饭",
+   "pinyin": "zuò fàn",
+   "meaning": null,
+   "keyPointId": "k2"
+  }
+ ]
+}
+```
+- `comparisonStatus`: `"ok"` | `"unavailable"` (malformed/failed LLM output, or gate `low_match`; `comparisonReason`); when unavailable: key points are listed with `covered:null`, `answeredQuestion:null`, `coveredCount:0`, no claims, `canPraise:false`.
+- `covered`: `true` | `"partial"` | `false` | `null`. A key point with a wrong fact has `covered:false, issue:"wrong_fact"`.
+- `praiseLevel`: `full` (all key points covered with non-low confidence, no wrong facts, question answered => `canPraise:true`) | `soft` (nothing missing or wrong, but a partial/low-confidence key point) | `none`. `answerKind`: `answered | dont_know | off_topic`.
+- `tone`: `{status:"ok"}` or `{status:"skipped", reason}`; tone is NEVER derived from the transcript.
+
+`coach_text` roles (all lines code-built; fixed lines have pre-warmed TTS): 
+- full: `praise` "回答得很好，要点都讲到了。" -> `next` "来下一个问题吧。" (with a confirmed tone error: `opener` "要点都讲到了，有一个发音可以再练一练。", the tone `correction`/`correction_model`, `next`).
+- missing/wrong/partial: `opener` ("有一个要点没讲到。" / "有些地方和原文不一样。" / "还差一点，有个要点没讲全。") -> up to **2** `correction`s (wrong fact > missing > partial; `caption` + `start/end` = the key point's offsets in chunk `sourceChunkIndex`; "你说的“…”和原文不一样。" / "漏掉了这个要点：…" / "这个要点只讲了一部分：…") -> one `correction_model` "可以这样说：<signed modelAnswerZh>" -> `next` "再试一次，或者下一个问题。". Tone corrections only fill leftover slots (meaning first).
+- off-topic / "I don't know": `opener` ("这个回答好像没有回答问题。" / "没关系，这个问题还没答出来。") -> `next` "想要提示可以点提示，也可以再试一次。" (no model answer is spoken: offer hint / `/api/qa/answer`).
+- unavailable: `opener` "这次没能检查你的回答。" -> `next`. Gate noise: only "我没有听清楚，请再说一遍。".
+`done`: `corrections[]` (`kind: missing_key_point|wrong_fact|tone`, `keyPointId`, `chunkIndex`, `start/end`, `factRef:"kp:k2"`, `heard` for wrong facts), `summary {questionId, comparisonStatus, coveredCount, totalCount, canPraise, tone, droppedClaims, checkAttempts, llmCalled, coached, timings}` and `timings {receiveMs, sttMs, checkMs, assessMs, toneWaitMs, firstCoachTextMs, firstAudioMs, ttsFirstAudioMs, ttsFirstCached, totalMs}` (`checkMs` = the answer-check LLM). Terminal `error` events (stage `transcribing|assessment`): `stt_not_configured`, `transcription_failed`, `no_speech_detected`, `qa_answer_too_long` (> 300 hanzi), `assessment_unavailable` (check AND tone both failed).
+Remaining events (output of the code, fake STT/LLM; the answer "他放学后踢足球。" misses key point 2):
+```
+EVENT coach_text {"delta":"有一个要点没讲到。","index":0,"role":"opener"}
+EVENT coach_text {"delta":"漏掉了这个要点：晚上他和妈妈一起做饭","index":1,"role":"correction","caption":"晚上他和妈妈一起做饭","start":11,"end":21}
+EVENT coach_text {"delta":"可以这样说：他放学后先踢足球，晚上和妈妈做饭。","index":2,"role":"correction_model","start":11,"end":21}
+EVENT coach_text {"delta":"再试一次，或者下一个问题。","index":3,"role":"next"}
+EVENT done {"corrections":[{"kind":"missing_key_point","targetText":"晚上他和妈妈一起做饭","explanationZh":"漏掉了这个要点：晚上他和妈妈一起做饭","modelText":"晚上他和妈妈一起做饭","factRef":"kp:k2","source":"server_fact","start":11,"end":21,"keyPointId":"k2","chunkIndex":0,"evidence":{"source":"transcript","confidence":"high"}}],"summary":{"engine":"toneperfect","mock":false,"basis":"transcript","transcriptUsed":true,"questionId":"qc0b9f15c685b","confirmedToneErrors":0,"comparisonStatus":"ok","coveredCount":1,"totalCount":2,"canPraise":false,"tone":"ok","coached":true,"llmCalled":true,"droppedClaims":0,"checkAttempts":1,"timings":{"receiveMs":6,"transcodeMs":0,"sttMs":11,"checkMs":9,"assessMs":17,"toneWaitMs":9,"firstCoachTextMs":30,"firstAudioMs":38,"ttsFirstAudioMs":8,"ttsFirstCached":false,"totalMs":46}},"timings":{"receiveMs":6,"transcodeMs":0,"sttMs":11,"checkMs":9,"assessMs":17,"toneWaitMs":9,"firstCoachTextMs":30,"firstAudioMs":38,"ttsFirstAudioMs":8,"ttsFirstCached":false,"totalMs":46}}
+```
+
+### Q&A limits (documented)
+The checker only knows the signed key points + model answer: facts outside the key points cannot be judged (they are neither praised nor accused). A question is generated from ONE chunk (the rest of the script is not sent to the LLM). Very short clips ("我不知道") can be mis-transcribed by STT (once heard as Japanese) and then give `no_speech_detected`. The learner's grammar slips may be auto-corrected by STT. Tone checking of free answers uses the transcript as the acoustic reference (unvalidated with real credits for QA).

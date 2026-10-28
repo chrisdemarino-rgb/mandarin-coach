@@ -5,6 +5,7 @@ import { createApp } from './app.js';
 import { createServices } from './services/index.js';
 import { FIXED_PHRASES_ZH } from './services/coach.js';
 import { RETELL_PHRASES_ZH } from './services/retell.js';
+import { QA_PHRASES_ZH } from './services/qa.js';
 
 loadDotEnv();
 
@@ -23,7 +24,7 @@ const app = createApp({ cfg, db, engine, services });
 app.listen(cfg.port, () => {
   // Warm the TTS cache for the fixed coach lines (opener, praise, retry, ...) with the saved voice/speed so the first feedback is a cache hit.
   const p = db.getPrefs?.() || {};
-  services.tts.warm?.({ phrases: [...FIXED_PHRASES_ZH, ...RETELL_PHRASES_ZH], voice: p.voice, speed: p.speed })?.catch?.(() => {});
+  services.tts.warm?.({ phrases: [...FIXED_PHRASES_ZH, ...RETELL_PHRASES_ZH, ...QA_PHRASES_ZH], voice: p.voice, speed: p.speed })?.catch?.(() => {});
   log('info', `Mandarin coach listening on http://localhost:${cfg.port} (env=${cfg.nodeEnv}, data=${cfg.dataDir})`);
   log('info', `assessment engine: ${engine.name}${engine.mock ? '  *** MOCK: results are NOT real pronunciation scores ***' : ''}`);
   log('info', `services: ${JSON.stringify(healthServices(cfg))}`);

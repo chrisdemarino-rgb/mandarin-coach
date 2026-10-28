@@ -22,10 +22,10 @@ export const toSimplified = (text) => { const s = String(text ?? ''); try { retu
 export const MAX_IDEAS = 8;
 export const MAX_RETELL_CORRECTIONS = 2;
 const HANZI_RE = /[\u3400-\u9fff\uf900-\ufaff]/;
-const TONE_CLAIM = /声调|声[一二三四1-4]|[一二三四1-4]声|轻声|升调|降调|音调|调子|平调|上扬|下降|升高|降低|发音|读音|读成|读错|\b(?:tones?|pinyin|pitch|pronunciation)\b|[āáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜ]/i;
-const PRAISE_RE = /很好|不错|太棒|很棒|完美|完整|全对|都对|正确|没问题|做得好|说得好|说得很|讲得好|讲得很|\b(?:good|great|perfect|well done|excellent|complete|correct)\b/i;
-const NON_ZH = /[A-Za-z0-9]/;
-const hz = (s) => Array.from(String(s ?? '')).filter((c) => HANZI_RE.test(c));
+export const TONE_CLAIM = /声调|声[一二三四1-4]|[一二三四1-4]声|轻声|升调|降调|音调|调子|平调|上扬|下降|升高|降低|发音|读音|读成|读错|\b(?:tones?|pinyin|pitch|pronunciation)\b|[āáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜ]/i;
+export const PRAISE_RE = /很好|不错|太棒|很棒|完美|完整|全对|都对|正确|没问题|做得好|说得好|说得很|讲得好|讲得很|\b(?:good|great|perfect|well done|excellent|complete|correct)\b/i;
+export const NON_ZH = /[A-Za-z0-9]/;
+export const hz = (s) => Array.from(String(s ?? '')).filter((c) => HANZI_RE.test(c));
 export const hanziOnly = (s) => hz(s).join('');
 
 // ---------------------------------------------------------------------------------------------------------------- fixed spoken lines
@@ -129,14 +129,14 @@ export function parseCompare(raw) {
 
 // ---------------------------------------------------------------------------------------------------------------- code validation
 // Function/common characters that a paraphrased model sentence may add without introducing a new fact.
-const FUNCTION_CHARS = new Set(Array.from('的了是在有和也都就很把被让给对从到说我你他她它们这那个不没还又但而所以因为如果会能要想去来上下可以一二三四五六七八九十为什么怎么然先再最'));
+export const FUNCTION_CHARS = new Set(Array.from('的了是在有和也都就很把被让给对从到说我你他她它们这那个不没还又但而所以因为如果会能要想去来上下可以一二三四五六七八九十为什么怎么然先再最'));
 /** A modelled sentence is accepted only when it adds (almost) nothing beyond the reference: at most 1 / 15% of its characters are new. */
 export function isGrounded(modelText, chunkText) {
   const m = hz(modelText); if (m.length < 2 || m.length > 60 || NON_ZH.test(modelText) || TONE_CLAIM.test(modelText)) return false;
   const ref = new Set(hz(chunkText)); const novel = m.filter((c) => !ref.has(c) && !FUNCTION_CHARS.has(c)).length;
   return novel <= Math.max(1, Math.floor(m.length * 0.15));
 }
-const cleanLine = (s, max = 40) => { const t = String(s ?? '').trim(); return t && t.length <= max && hz(t).length >= 2 && !NON_ZH.test(t) ? t : ''; };
+export const cleanLine = (s, max = 40) => { const t = String(s ?? '').trim(); return t && t.length <= max && hz(t).length >= 2 && !NON_ZH.test(t) ? t : ''; };
 
 /**
  * Turn the parsed LLM object into code-owned facts. Returns
@@ -292,7 +292,7 @@ function ideaCorrection(kind, idea, chunkText, lc, partial = false) {
     ...(kind === 'wrong_meaning' && lc.quote ? { heard: lc.quote } : {}), evidence: { source: 'transcript', confidence: idea.confidence } };
 }
 const TONE_NAMES = { 1: '第一声', 2: '第二声', 3: '第三声', 4: '第四声', 5: '轻声' };
-function toneCorrection(f, toneRef) {
+export function toneCorrection(f, toneRef) {
   const modelText = Array.from(String(toneRef)).slice(Math.max(0, f.start - 1), f.end + 1).join(''); // the learner's own word(s) around the syllable
   const w = (n) => TONE_NAMES[n] || '轻声';
   return { kind: 'tone', targetText: f.char, start: f.start, end: f.end, pinyin: f.pinyin, modelText: modelText || f.char, factRef: f.ref, source: 'server_fact', evidence: { source: 'acoustic', confidence: 'low' },

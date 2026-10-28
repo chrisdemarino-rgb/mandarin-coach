@@ -49,6 +49,11 @@ export const ASSESSMENT_POLICY = Object.freeze({
   RETELL_TONE_WAIT_MS: 3000,        // how long to wait for the (optional) TonePerfect check of the transcript; later => tone skipped ("timeout")
   RETELL_COMPARE_MAX_MS: 9000,      // wall-clock cap of the meaning-comparison LLM call incl. its one retry; later => comparisonStatus "unavailable"
   RETELL_MAX_TRANSCRIPT_HANZI: 300, // longer retellings are refused (retell_too_long); the tone check additionally needs <= 100 hanzi (TonePerfect limit)
+  // ---- Q&A practice mode (services/qa.js, routes/qa.js)
+  QA_NEXT_MAX_MS: 8000,             // wall-clock cap of the question-generation LLM call incl. its one retry => 502 question_generation_failed
+  QA_CHECK_MAX_MS: 8000,            // wall-clock cap of the answer-check LLM call incl. its one retry => comparisonStatus "unavailable"
+  QA_TONE_WAIT_MS: 3000,            // optional TonePerfect check of the answer transcript (same policy as retell); later => tone skipped
+  QA_MAX_TRANSCRIPT_HANZI: 300,     // longer answers are refused (qa_answer_too_long)
   // A silent gap between consecutive syllables longer than this (ms) does not claim an error but blocks plain praise.
   // Data: genuine takes had gaps up to 625 ms (clip 05) so this only withholds praise, it never flags a word.
   LONG_PAUSE_MS: 500,
@@ -121,6 +126,7 @@ export function loadConfig(env = process.env) {
       apiKey: has(env.OPENAI_API_KEY) ? env.OPENAI_API_KEY.trim() : null,
       baseUrl: (env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, ''),
       coachModel: env.COACH_MODEL || 'gpt-4.1-mini',
+      qaModel: env.QA_MODEL || env.COACH_MODEL || 'gpt-4.1-mini',
       retellModel: env.RETELL_MODEL || env.COACH_MODEL || 'gpt-4.1-mini',
       sttModel: env.STT_MODEL || 'gpt-4o-transcribe',
       ttsModel: env.OPENAI_TTS_MODEL || 'gpt-4o-mini-tts',

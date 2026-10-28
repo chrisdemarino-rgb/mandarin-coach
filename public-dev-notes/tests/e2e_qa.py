@@ -84,7 +84,7 @@ def run(viewport, tag, browser):
     p.click("#btnQaPrimary")
     check(wait_q(p, "asking", 15000) or qs(p) == "ready", "Start loads a question and asks it")
     check(visible(p, "#qaCard") and len(txt(p, "#qaQuestion")) > 4, f"question text shown: {txt(p, '#qaQuestion')}")
-    check(visible(p, "#btnQaHear") and ("Replay" in txt(p, "#btnQaHear") or "Playing" in txt(p, "#btnQaHear")), "replay question button")
+    check(visible(p, "#btnQaHear") and ("Replay" in txt(p, "#btnQaHear") or "Playing" in txt(p, "#btnQaHear") or "Stop" in txt(p, "#btnQaHear")), "replay question button")
     check(p.evaluate("__coach.Q.micArmed") is True, "mic armed inside the Start tap")
     p.wait_for_timeout(300)
     shot(p, f"{tag}-40-qa-question")

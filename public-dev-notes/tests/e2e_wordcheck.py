@@ -160,6 +160,8 @@ def run(viewport, tag, browser):
     check("All key points covered" in txt(p, "#qaVerdict") and not visible(p, "#qaWordWrap") and p.locator("#qaSource .hl-substituted").count() == 0, "Q&A clean: all-clear as before, no Word check")
     p.click("#btnQaFinish")
     check(not errors, "no page errors: " + "; ".join(errors[:3]))
+    try: p.evaluate("fetch('/api/prefs',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({practiceMode:'listen_repeat'})})"); p.wait_for_timeout(300)   # leave the server prefs as found
+    except Exception: pass
     ctx.close()
 
 with sync_playwright() as pw:

@@ -32,6 +32,8 @@ with sync_playwright() as pw:
     p = ctx.new_page(); errors = []; posted = []
     p.on("pageerror", lambda e: errors.append(str(e)))
     p.on("request", lambda r: posted.append(r.post_data_buffer.decode("utf-8", "replace") if r.method == "POST" and ("/api/qa/attempt" in r.url) and r.post_data_buffer else None) if "/api/qa/attempt" in r.url else None)
+    p.add_init_script("""(() => { const f = window.fetch; window.__qaForms = [];
+      window.fetch = function (u, o) { try { if (String(u).includes('/api/qa/attempt') && o && o.body && typeof o.body.get === 'function') window.__qaForms.push({ chunkText: o.body.get('chunkText'), fields: [...o.body.keys()] }); } catch (e) {} return f.apply(this, arguments); }; })();""")
     p.goto(BASE); p.wait_for_selector("#view-login", state="visible", timeout=8000)
     p.fill("#passcode", PASS); p.click("#btnLogin"); p.wait_for_function("document.body.dataset.auth === 'in'", timeout=8000)
     p.click('.tab[data-view="script"]'); p.click("#btnSample")
@@ -88,8 +90,8 @@ with sync_playwright() as pw:
     assert wait_q(p, "ready", 25000), "never ready"
     p.click("#btnQaPrimary"); assert wait_q(p, "listening", 10000); p.wait_for_timeout(1200); p.click("#btnQaPrimary")
     check(wait_q(p, "result", 30000), "Q&A: real server result reached"); p.wait_for_timeout(800)
-    body = next((x for x in posted if x), "")
-    check('name="chunkText"' in body and chunk in body, "Q&A: the real POST carries chunkText = the FULL chunk")
+    forms = p.evaluate("window.__qaForms"); fm = forms[0] if forms else {}
+    check(fm.get("chunkText") == chunk and "audio" in (fm.get("fields") or []), "Q&A: the real POST carries chunkText = the FULL chunk")
     info = p.evaluate("__coach.Q.info"); a = p.evaluate("__coach.Q.assessment")
     print("   Q&A wordStatus:", json.dumps(a.get("wordStatus"), ensure_ascii=False)[:300])
     q0 = p.evaluate("__coach.Q.question.payload.keyPoints.map(k => k.textZh)")
@@ -120,6 +122,8 @@ with sync_playwright() as pw:
     check(not (a2.get("wordStatus") or []) and not visible(p, "#qaWordWrap") and "All key points covered" in txt(p, "#qaVerdict"), f"Q&A verbatim reuse: nothing flagged, all-clear as before ('{txt(p, '#qaVerdict')}')")
     p.click("#btnQaFinish")
     check(not errors, "no page errors: " + "; ".join(errors[:3]))
+    try: p.evaluate("fetch('/api/prefs',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({practiceMode:'listen_repeat'})})"); p.wait_for_timeout(300)   # leave the server prefs as found
+    except Exception: pass
     b.close()
 print(f"\n{checks} checks, {len(fails)} failed", flush=True)
 for f in fails: print("FAIL:", f)

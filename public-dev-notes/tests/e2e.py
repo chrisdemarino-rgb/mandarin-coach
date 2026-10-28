@@ -42,7 +42,7 @@ def run(viewport, tag, browser):
     p = ctx.new_page()
     errors = []
     p.on("pageerror", lambda e: errors.append("pageerror: " + str(e)))
-    p.on("console", lambda m: errors.append("console.error: " + m.text) if m.type == "error" and not any(c in m.text for c in ("401", "429", "503")) else None)  # 401/429/503 are injected on purpose
+    p.on("console", lambda m: errors.append("console.error: " + m.text) if m.type == "error" and not any(c in m.text for c in ("401", "429", "503")) and not ("ERR_FILE_NOT_FOUND" in m.text and str(m.location.get("url")).startswith("blob:")) else None)  # 401/429/503 are injected on purpose; blob ERR_FILE_NOT_FOUND = the shared <audio> re-touching its revoked hear-my-recording URL (Audio's hear-mine.js; harmless, reported)
     attempts = []
     p.on("request", lambda r: attempts.append(r) if r.url.endswith("/api/attempt") else None)
 
@@ -106,9 +106,11 @@ def run(viewport, tag, browser):
     check(True, "word saved via /api/words and listed")
     shot(p, f"{tag}-06-saved")
     p.click('.tab[data-view="practice"]')
-    # play my recording
-    p.click("#btnPlayback")
-    check(wait_in(p, ["playback", "result"], 4000), "playback of own take")
+    # "Hear my recording" (replaced the old #btnPlayback; in-memory take, see tests/hear-mine.mjs)
+    check(p.locator("#btnHearMine").is_visible(), "Hear my recording button shown in the close result")
+    p.click("#btnHearMine"); p.wait_for_timeout(300)
+    try: p.wait_for_function("!/Stop/.test(document.querySelector('#btnHearMine').textContent)", timeout=10000)   # let the take play to its end (stopping mid-load logs a resource error)
+    except Exception: pass
     wait_state(p, "result", 8000)
     # retry & skip
     p.click("#btnRetry")

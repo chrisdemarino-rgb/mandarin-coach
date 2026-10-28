@@ -37,7 +37,7 @@ CREATE INDEX IF NOT EXISTS idx_missed_status ON missed_words(status, miss_count,
 export const PREF_DEFAULTS = Object.freeze({
   chunkMode: 'sentence',      // sentence | four | paragraph
   assessMode: 'close',        // close | retell
-  practiceMode: 'listen_repeat', // listen_repeat | fading_cues | trouble_word (see routes/prefs.js)
+  practiceMode: 'listen_repeat', // listen_repeat | fading_cues | trouble_word | qa | free_talk (see routes/prefs.js)
   voice: 'zh-CN-XiaoxiaoNeural',
   speed: 1.0,                 // 0.6 - 1.2
 });

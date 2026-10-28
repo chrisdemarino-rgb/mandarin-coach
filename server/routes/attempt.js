@@ -16,7 +16,9 @@ import { analyzeWords, emptyWordFacts } from '../engines/assessment/words.js';
 import { runCoach, splitSentences, hanzi, wordCorrection, modelWindow, planCorrections, factCorrection, GATE_PHRASE_ZH, FIXED_PHRASES_ZH, DRILL_OK_ZH, DRILL_RETRY_ZH } from '../services/coach.js';
 import { compareMeaning, buildRetellBlock, toSimplified, planRetellCoach, RT_GATE_ZH, RETELL_PHRASES_ZH } from '../services/retell.js';
 import { QA_PHRASES_ZH } from '../services/qa.js';
+import { TALK_PHRASES_ZH } from '../services/talk.js';
 import { qaRoutes } from './qa.js';
+import { talkRoutes } from './talk.js';
 import { reuseFindings, reuseWordStatus, reuseFacts, reuseCorrections } from '../services/reuse.js';
 import { saveMissed, fillGlosses, drillTarget } from '../lib/missed.js';
 import { rateLimit } from '../lib/ratelimit.js';
@@ -135,7 +137,7 @@ export function attemptRouter({ cfg, engine, services, db }) {
     return { unit, done: () => chain };
   }
 
-  const warmTts = (b) => { services.tts.warm?.({ phrases: [...FIXED_PHRASES_ZH, ...RETELL_PHRASES_ZH, ...QA_PHRASES_ZH], voice: b.voice, speed: Number(b.speed) || undefined })?.catch?.(() => {}); };
+  const warmTts = (b) => { services.tts.warm?.({ phrases: [...FIXED_PHRASES_ZH, ...RETELL_PHRASES_ZH, ...QA_PHRASES_ZH, ...TALK_PHRASES_ZH], voice: b.voice, speed: Number(b.speed) || undefined })?.catch?.(() => {}); };
   const meaningOf = (text) => db.getMissedByText(text)?.meaning ?? null;
 
   /** Word analysis + facts + auto-save. */
@@ -369,5 +371,6 @@ export function attemptRouter({ cfg, engine, services, db }) {
   }
 
   qaRoutes(r, { cfg, engine, services, db, bad, stamp, stream, speaker, warmTts, meaningOf, publicCorrection, ID_RE });
+  talkRoutes(r, { cfg, engine, services, db, bad, stamp, stream, speaker, warmTts, meaningOf, ID_RE });
   return r;
 }

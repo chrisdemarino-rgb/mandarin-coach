@@ -3,7 +3,7 @@ import { Router } from 'express';
 const ENUMS = {
   chunkMode: ['sentence', 'four', 'paragraph'],
   assessMode: ['close', 'retell'],
-  practiceMode: ['listen_repeat', 'fading_cues', 'trouble_word', 'qa'], // trouble_word = the missed-word drill screen (its own endpoints: /api/drill/*); qa = Q&A practice (its own endpoints: /api/qa/*)
+  practiceMode: ['listen_repeat', 'fading_cues', 'trouble_word', 'qa', 'free_talk'], // free_talk = Free talk (its own endpoints: /api/talk/*); trouble_word = the missed-word drill screen (its own endpoints: /api/drill/*); qa = Q&A practice (its own endpoints: /api/qa/*)
 };
 const bad = (res, message) => res.status(400).json({ ok: false, error: { code: 'invalid_prefs', message } });
 

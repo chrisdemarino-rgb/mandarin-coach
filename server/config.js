@@ -54,6 +54,14 @@ export const ASSESSMENT_POLICY = Object.freeze({
   QA_CHECK_MAX_MS: 8000,            // wall-clock cap of the answer-check LLM call incl. its one retry => comparisonStatus "unavailable"
   QA_TONE_WAIT_MS: 3000,            // optional TonePerfect check of the answer transcript (same policy as retell); later => tone skipped
   QA_MAX_TRANSCRIPT_HANZI: 300,     // longer answers are refused (qa_answer_too_long)
+  // ---- FREE TALK (services/talk.js, routes/talk.js)
+  TALK_MAX_TRANSCRIPT_HANZI: 400,   // longer turns are refused (talk_turn_too_long); the optional tone check additionally needs <= 100 hanzi
+  TALK_REPLY_MAX_MS: 12000,         // wall-clock cap of the streamed reply call incl. its one retry
+  TALK_FIND_WAIT_MS: 3500,          // after the reply is fully spoken-queued, wait at most this long (from the finder's start) for the correction finder before the follow-up question is queued
+  TALK_FIND_MAX_MS: 8000,           // hard cap of the correction finder incl. its one retry; later => no correction
+  TALK_TONE_WAIT_MS: 3000,          // optional (tone:true) TonePerfect check of the transcript; later => tone skipped
+  TALK_OPENING_MAX_MS: 8000,        // /api/talk/opening LLM cap incl. retry
+  TALK_SUMMARY_MAX_MS: 12000,       // /api/talk/summary LLM cap incl. retry
   // ---- reused-phrase word check (services/reuse.js; retell + Q&A). A stretch of the transcript that is a NEAR-VERBATIM reuse of a script
   //      phrase is compared word by word (pinyin-level local alignment); a substituted/omitted script word inside it blocks praise.
   //      Paraphrases (low overlap) are never flagged. See test/reuse.test.js for the paraphrase vs near-verbatim matrix.
@@ -136,6 +144,7 @@ export function loadConfig(env = process.env) {
       baseUrl: (env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, ''),
       coachModel: env.COACH_MODEL || 'gpt-4.1-mini',
       qaModel: env.QA_MODEL || env.COACH_MODEL || 'gpt-4.1-mini',
+      talkModel: env.TALK_MODEL || env.COACH_MODEL || 'gpt-4.1-mini',
       retellModel: env.RETELL_MODEL || env.COACH_MODEL || 'gpt-4.1-mini',
       sttModel: env.STT_MODEL || 'gpt-4o-transcribe',
       ttsModel: env.OPENAI_TTS_MODEL || 'gpt-4o-mini-tts',

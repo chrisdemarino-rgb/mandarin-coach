@@ -353,7 +353,7 @@ test('ATTEMPT request validation: audio, question field, attemptId, TTS-tagged a
   } finally { await t.close(); }
 });
 test('QA persists NOTHING: DB unchanged, no temp files, no auto-saved words (next, hint, answer and attempt incl. a wrong answer)', async () => {
-  const priv = fs.mkdtempSync(os.tmpdir() + '/qa-priv-'); const oldTmp = process.env.TMPDIR; process.env.TMPDIR = priv; // private tmpdir: other test files run in parallel processes
+  const priv = fs.mkdtempSync((fs.existsSync('/dev/shm') ? '/dev/shm' : os.tmpdir()) + '/qa-priv-'); const oldTmp = process.env.TMPDIR; process.env.TMPDIR = priv; // private tmpdir: other test files run in parallel processes
   const t = await server(envOai());
   const snap = () => JSON.stringify(t.db.raw.prepare("select name from sqlite_master where type='table' and name not like 'sqlite_%'").all().map((x) => [x.name, t.db.raw.prepare(`select * from ${x.name}`).all()]));
   try {

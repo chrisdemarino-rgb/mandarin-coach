@@ -16,7 +16,7 @@ export async function startFakeServices() {
       if (state.chatStatus !== 200) { res.writeHead(state.chatStatus, { 'Content-Type': 'application/json' }); return res.end('{"error":{"message":"boom sk-leakleakleak1234"}}'); }
       const j = JSON.parse(body.toString()); rec.json = j;
       const content = typeof state.chatScript === 'function' ? state.chatScript(j) : state.chatScript;
-      if (!j.stream) { state.jsonCalls++; res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ choices: [{ message: { content } }] })); }
+      if (!j.stream) { state.jsonCalls++; if (state.chatDelayFn) { const ms = state.chatDelayFn(j); if (ms) await new Promise((r) => setTimeout(r, ms)); } res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ choices: [{ message: { content } }] })); }
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       const text = content ?? '{}';
       for (let i = 0; i < text.length; i += 9) {

@@ -58,7 +58,8 @@ test('prefs: defaults, partial update, validation', async () => {
   assert.equal((await t.api('PUT', '/api/prefs', { speed: 3 })).status, 400);
   assert.equal((await t.api('PUT', '/api/prefs', { hax: 1 })).status, 400);
   assert.equal((await t.api('PUT', '/api/prefs', { practiceMode: 'fading_cues' })).status, 200);
-  assert.equal((await t.api('PUT', '/api/prefs', { practiceMode: 'free_talk' })).status, 400); // future modes rejected until built
+  assert.equal((await t.api('PUT', '/api/prefs', { practiceMode: 'karaoke' })).status, 400); // unknown modes rejected
+  assert.equal((await t.api('PUT', '/api/prefs', { practiceMode: 'free_talk' })).json.practiceMode, 'free_talk'); // Free talk client mode (own endpoints /api/talk/*)
   assert.equal((await t.api('PUT', '/api/prefs', { practiceMode: 'listen_repeat' })).json.practiceMode, 'listen_repeat');
 });
 

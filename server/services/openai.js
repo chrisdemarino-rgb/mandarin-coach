@@ -36,12 +36,12 @@ export function createOpenAI(cfg) {
     available: !!apiKey,
 
     /** Async generator of content deltas (strings) from a streaming chat completion in JSON mode. */
-    async *chatStream({ messages, signal, model = cfg.openai.coachModel, maxTokens = 600, timeoutMs = 30_000 }) {
+    async *chatStream({ messages, signal, model = cfg.openai.coachModel, maxTokens = 600, timeoutMs = 30_000, temperature = 0.3 }) {
       if (!apiKey) throw notConfigured('coaching');
       const sig = signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
       const res = await checked(await net(fetch(`${baseUrl}/chat/completions`, {
         method: 'POST', headers: { ...auth(), 'Content-Type': 'application/json' }, signal: sig,
-        body: JSON.stringify({ model, messages, stream: true, temperature: 0.3, max_tokens: maxTokens, response_format: { type: 'json_object' } }),
+        body: JSON.stringify({ model, messages, stream: true, temperature, max_tokens: maxTokens, response_format: { type: 'json_object' } }),
       }), 'chat'), 'chat');
       const dec = new TextDecoder(); let buf = '';
       for await (const chunk of res.body) {

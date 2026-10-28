@@ -541,3 +541,86 @@ EVENT done {"corrections":[{"kind":"missing_key_point","targetText":"晚上他�
 
 ### Q&A limits (documented)
 The checker only knows the signed key points + model answer: facts outside the key points cannot be judged (they are neither praised nor accused). A question is generated from ONE chunk (the rest of the script is not sent to the LLM). Very short clips ("我不知道") can be mis-transcribed by STT (once heard as Japanese) and then give `no_speech_detected`. The learner's grammar slips may be auto-corrected by STT. Tone checking of free answers uses the transcript as the acoustic reference (unvalidated with real credits for QA).
+
+
+# Free talk mode (added 2026-10-28)
+
+Chris talks freely in Mandarin about a topic, one turn at a time. Each turn the server does STT, then the coach answers in SHORT spoken Mandarin: a natural reaction + ONE follow-up question (conversation partner), plus **at most one correction** (word choice / grammar / unnatural phrase / "I don't know how to say X") and, if relevant, **script vocabulary he could have used** (only words the client sent). All routes need the login cookie (401 otherwise). Prefs: `practiceMode` now also accepts `"free_talk"` (`PUT /api/prefs`); `POST /api/attempt` still only takes `listen_repeat|fading_cues` (Free talk has its own endpoints). Code: `server/services/talk.js` (pure logic + prompts + validation), `server/routes/talk.js`. Env: `TALK_MODEL` (ENV.md).
+
+**Stateless.** Nothing is stored: no conversation, transcript, audio, corrections or words (tests assert DB + temp dir are untouched; nothing is auto-saved to "words I don't know" — `suggestedWords` are only suggestions for the client's "Save word" button, `POST /api/words/missed` is the client's call). The client keeps the conversation and sends the last turns' TEXT with every call. The server uses only the last **8 turns** (each turn <= 300 chars, all turns together <= 2400 chars; older/longer is silently cut; `done.summary.turnsSent/turnsUsed` tells you what happened). The only server memory is the usual 10-minute SSE replay record for an `attemptId` and the mp3 cache of the coach's own TTS.
+
+**Grounding (what the coach may and may not say).**
+- Corrections come from the **transcript text only** (word choice / grammar / unnatural phrasing). The LLM must quote the transcript; CODE verifies the quote is in the transcript (trad/simplified tolerant; a hallucinated quote => correction dropped), requires `confidence:"high"`, drops corrections whose "better" version has the same sounds (that is STT/pronunciation, never a text error) or is unchanged, and keeps at most ONE. `explainZh` is rewritten by code to a fixed neutral line if it is empty, long, contains Latin text, praise or a sound claim (`correction.source:"server"` instead of `"llm"`).
+- **No tone / pronunciation claims are ever made from the transcript.** Reply, question, explanation and model sentences are filtered for tone/pitch/pronunciation words (same `TONE_CLAIM` filter as retell/Q&A, plus English sound words) and for praise of the learner's Chinese; a filtered sentence is dropped (never "repaired"). Tone is only reported from the **acoustic** engine when the client asks for it (`tone:true`, below).
+- STT may autocorrect or mis-hear; the finder prompt says so and says "no correction unless clearly wrong and highly confident". If nothing is clearly wrong there is **no correction** — and if the finder judged the turn clearly natural (and it was >= 6 hanzi) the coach adds one short fixed line (`说得很自然。` / `这样说很自然。` / `你的说法很自然。`, role `praise`) at most. The server never invents a correction to have something to say.
+- `english_gap` (he said English words because he did not know the Mandarin): the English text in the transcript is the `quote`, `betterZh` is the Mandarin word/phrase, `pinyin` is computed by code; it is **not an error** (spoken as "可以这样说：…"), and it is offered as a suggested word with `meaning` = the English he said (`reason:"english_gap"`). No Latin text is ever spoken or put in `coach_text`.
+- `vocabHints` / `suggestedWords[reason:"script_vocab"]`: ONLY entries of the `scriptVocab` the client sent in this request (anything else the LLM names is dropped), and only words he did not already say. At most 2; the first one is spoken as `你也可以用“水果”这个词。` (role `vocab`) when there is no correction. Pinyin is always computed by code.
+
+## POST /api/talk/turn  (multipart -> `text/event-stream`, same plumbing as `/api/attempt`)
+
+Fields: `audio` (file, <= 10 MB), `attemptId` (8-100 chars; same idempotent replay as the other modes: same id => recorded events replayed with `X-Attempt-Replayed: true`, no second STT/LLM call; failed attempts re-run; concurrent duplicate => 409), `context` (JSON **string**, <= 32 KB), optional `voice`, `speed` (0.5-1.5, like the other modes). `source=tts` / `X-Audio-Source: tts` => 400 `tts_audio_rejected`.
+
+```json
+// context
+{"topic": "我的周末",
+ "scriptVocab": [{"text": "爬山"}, {"text": "风景", "pinyin": "ignored — computed by the server"}],   // optional, <= 200 entries sent (413 context_too_large beyond that); the first 40 unique 1-12 hanzi entries are used
+ "turns": [{"role": "coach", "text": "这个周末你想做什么？"}, {"role": "user", "text": "我想去爬山。"}],   // optional, last turns' TEXT (capped as above); role "coach"|"user"
+ "level": "normal",                                                                                        // optional "easy" (HSK2-3, <12 char sentences) | "normal" (default, HSK3-4)
+ "tone": false}                                                                                            // optional, default false (see "Tone")
+```
+
+Pre-stream errors (JSON `{ok:false,error:{code,message}}`): 400 `missing_audio` `invalid_context` (not JSON / bad shape / bad `turns` role / non-boolean `tone` / non-string `topic`) `invalid_level` `invalid_attempt_id` `tts_audio_rejected` `invalid_upload`; 413 `upload_too_large` `context_too_large`; 401; 429 (40 turns / min). In-stream `error` events (retryable flag + `stage`): `llm_not_configured`, `stt_not_configured` (no OpenAI key), `talk_turn_too_long` (> 400 hanzi heard; ask for shorter turns), the usual STT failures (`stage:"transcribing"`, nothing coached), and `talk_llm_unavailable` (`stage:"coaching"`, `retryable:true`): the reply LLM failed twice — **no reply is fabricated**; the `transcript` event was already sent so the UI can keep what he said and offer "try again" (re-send with a NEW `attemptId`).
+
+### Events (in this order; every event is optional except `transcript`/`done`)
+1. `status {stage:"transcribing"}`
+2. **`transcript`** — sent the moment STT finishes: `{"text":"我昨天去商店买了一个很多苹果，然后我回家。","sttStatus":"ok","hanziCount":19,"hasEnglish":false}`. `sttStatus` = `ok` | `empty` | `too_short` | `hallucination` (a non-`ok` status means the gate fired, see below). Show `text` as "what I heard"; it is simplified Chinese (+ any English he said).
+3. `status {stage:"coaching"}`, then (only with `tone:true` and when it could run) `assessment` (below), `coach_text`, `coach_audio` …
+4. **`coach_text`** `{"delta":"听起来很不错！","index":0,"role":"reply"}` — one event per spoken sentence, streamed as early as possible (the reply is sent to TTS the moment the LLM has produced it, before the correction finder is done). `role` ∈ `reply` (reaction to what he said) · `correction` (short Mandarin explanation; has `caption:"很多苹果 hěn duō píng guǒ"`) · `correction_model` (`可以这样说：很多苹果`; tone fact: `应该这样说：…`) · `vocab` · `praise` · `question` (the follow-up question) · `gate` (the fixed "didn't catch that" line). `index` counts spoken units from 0.
+5. **`coach_audio`** `{"url":"/api/audio/<id>.mp3","index":0,"text":"听起来很不错！"}` — per sentence, in order, TTS pipelined (play them in `index` order; the `status {stage:"speaking"}` / `tts_unavailable` behaviour is identical to the other modes: when TTS is unavailable you still get all `coach_text`).
+6. **`done`**
+```json
+{"correction": {"kind": "word_choice", "quote": "一个很多苹果", "betterZh": "很多苹果", "explainZh": "“很多”前面不用“一个”。", "pinyin": "hěn duō píng guǒ", "source": "llm"},
+ "correctionStatus": "ok",
+ "suggestedWords": [{"text": "很多苹果", "pinyin": "hěn duō píng guǒ", "meaning": null, "reason": "word_choice"},
+                    {"text": "水果", "pinyin": "shuǐ guǒ", "meaning": null, "reason": "script_vocab"}],
+ "vocabHints": [{"text": "水果", "pinyin": "shuǐ guǒ"}],
+ "replyZh": "听起来很不错！", "questionZh": "你最喜欢吃什么水果？",
+ "summary": {"basis": "transcript", "transcriptUsed": true, "turnsUsed": 1, "turnsSent": 1, "coached": true, "llmCalled": true, "replyAttempts": 1, "findAttempts": 1, "droppedClaims": 0, "tone": "skipped", "toneReason": "not_requested"},
+ "timings": {"receiveMs": 20, "transcodeMs": 0, "sttMs": 18, "correctionMs": 13, "replyFirstTokenMs": 15, "replyMs": 17, "firstCoachTextMs": 37, "firstAudioMs": 46, "ttsFirstAudioMs": 9, "ttsFirstCached": false, "totalMs": 60}}
+```
+- `correction`: `null` or ONE object `{kind, quote, betterZh, explainZh, pinyin, source}`; `kind` ∈ `word_choice` | `grammar` | `unnatural` | `english_gap` (| `tone`, only with `tone:true`, see below). `quote` is verified to be in the transcript (for `english_gap`: the English words he said). `pinyin` is for `betterZh`. `suggestedWords[].meaning` is `null` unless known (English gap: the English he said; or a word already in the user's saved list); `reason` ∈ `word_choice|grammar|unnatural|english_gap|script_vocab`. For non-English kinds a short (2-6 hanzi) `betterZh` is offered as a suggested word.
+- `correctionStatus`: `ok` (a correction is returned) | `none` (checked, nothing clearly wrong) | `unavailable:<reason>` (finder failed/malformed twice — conversation unaffected, simply no correction) | `timeout` | `skipped` (gate). `correctionLate:true` when the finder took longer than 3.5 s: then the order is reply → **question** → correction → model (the conversation is never blocked on the correction).
+- `degraded:"reply_malformed"`: the reply LLM answered but twice not in the schema: the coach says the fixed line `请继续说，我在听。` (`replyZh` is then `null`, no question, no correction guessed).
+- `timings`: `sttMs` (STT), `replyFirstTokenMs` (first LLM token of the reply), `replyMs`, `correctionMs` (finder wall time), `firstCoachTextMs`, `firstAudioMs` (from request start to the first `coach_audio`), `ttsFirstAudioMs`, `totalMs`; tone: `assessMs`, `toneWaitMs`.
+- Stream design (measured choice): TWO parallel LLM calls after STT — a streamed **reply** call (`{"replyZh","questionZh"}`, temp 0.6, 160 tokens; `replyZh` is spoken as soon as its JSON string closes, `questionZh` is held until the correction decision) and a non-streamed **finder** call (temp 0, 260 tokens). A single streamed call was rejected: the correction needs a careful temp-0 judgement and must not delay the first audio.
+
+### Gate (silence / noise / STT hallucination)
+Empty, < 2 characters, or a known STT hallucination ("谢谢观看", "请订阅", "Thanks for watching" …) => `transcript.sttStatus` = `empty|too_short|hallucination`, ONE spoken line `我没有听清楚，请再说一遍。` (`coach_text.role:"gate"` + audio), `done {gate:"empty|too_short|hallucination", correction:null, correctionStatus:"skipped", suggestedWords:[], vocabHints:[], replyZh:null, questionZh:null, summary:{coached:false,llmCalled:false}}`. No LLM, no TonePerfect call. English-only speech is NOT noise (it is the "I don't know how to say it" case).
+
+### Tone (optional, default OFF)
+`context.tone:true` runs TonePerfect on the **transcript** as the reference (same as retell/Q&A; `lowConfidence:true`, existing policy: confirmed errors only, hedged). It is skipped silently (no error; `done.summary.tone:"skipped"` + `toneReason`) when: not requested (`not_requested`), the transcript has digits/Latin (`transcript_has_digits_or_latin`), > 100 hanzi, no hanzi, engine error/low-match/not finished within 3 s (`tone_check_timeout`). If it ran, an `assessment` event `{…engine result…, "lowConfidence":true, "basis":"transcript", "referenceText":"…", "transcript":"…", "facts":{…}, "wordStatus":[], "savedMissed":[]}` is sent before `done`, and a *confirmed* tone error becomes the single correction (`correction.kind:"tone", source:"server_fact"`, with `evidence`) **only when the text finder returned none** — the text correction always wins; at most one correction per turn. Tone is never inferred from text. Costs one TonePerfect credit per turn, so leave it off unless Chris asks.
+
+## POST /api/talk/opening  (JSON, `?audio=1&voice=&speed=` optional)
+Request `{"topic":"我的周末","scriptVocab":[{"text":"爬山"}],"level":"normal"}` (`topic` required, <= 120 chars; `scriptVocab`, `level` optional). Response:
+```json
+{"ok": true, "textZh": "这个周末你想做什么？", "pinyin": "zhè ge zhōu mò nǐ xiǎng zuò shén me？",
+ "textAudio": {"url": "/api/audio/27e9a46d7568faba86d5dc62.mp3"},     // only with ?audio=1 (else call POST /api/tts with textZh)
+ "timings": {"openingMs": 4, "llmAttempts": 1, "audioMs": 4, "totalMs": 8}}
+```
+Errors: 400 `invalid_topic` `invalid_level` `invalid_context`/`context_too_large` (scriptVocab), 503 `llm_not_configured`, 502 `opening_generation_failed` (LLM failed/malformed twice or the output broke a filter — never a fabricated opening; the client may fall back to its own canned question), 429 (40/min). One short friendly open question (<= 30 chars), no tone talk. Nothing stored.
+
+## POST /api/talk/summary  (JSON)
+Request `{"topic":"我的周末","turns":[{"role":"coach","text":"…"},{"role":"user","text":"…"}], "scriptVocab":[{"text":"爬山"}], "level":"normal"}` — the WHOLE session text (<= 200 turns, <= 20 000 chars total, else 413 `session_too_long`; the prompt itself uses only the last 40 turns / 6000 chars). Needs >= 1 non-empty `user` turn (400 `no_user_turns`). Response:
+```json
+{"ok": true,
+ "takeaways": [{"textEn": "You described what you bought and where you went.", "textZh": "我去商店买了苹果。", "pinyin": "wǒ qù shāng diàn mǎi le píng guǒ。"}],     // 2-5 (aim 3-5)
+ "newWords": [{"text": "水果", "pinyin": "shuǐ guǒ", "meaning": "fruit", "exampleZh": "我喜欢吃水果。"}],                              // 0-8, each word is 1-8 hanzi and appears in its own exampleZh; saveable by the client
+ "phrasesToTry": [{"zh": "我买了很多苹果。", "pinyin": "wǒ mǎi le hěn duō píng guǒ。", "en": "I bought a lot of apples.", "whyEn": "Natural way to say a large amount."}],   // 1-5
+ "strengths": ["Clear sequence of events."],                                                                                          // 1-2
+ "statsDerived": {"turns": 4, "userTurns": 2, "approxCharsSpoken": 23},                                                              // by CODE: hanzi count of the user's turns
+ "timings": {"summaryMs": 1500, "llmAttempts": 1, "droppedItems": 0, "totalMs": 1503}}
+```
+Strict schema check by code; items that break a rule (Latin in the Chinese fields, tone/pronunciation/accent words anywhere, newWord not contained in its example, …) are dropped; too little left (< 2 takeaways, no phrase or no strength) => retry once, then 502 `summary_generation_failed` (no fabricated summary). Errors: 400 `invalid_turns` `invalid_level` `invalid_request` `no_user_turns`, 413, 503 `llm_not_configured`, 429 (20/min). No pronunciation/tone claims, nothing stored.
+
+### Free talk limits (documented)
+Corrections are text-only judgements by an LLM with code guards: a wrong-but-grammatical phrase can slip through (no correction is the safe default), and when STT autocorrects a real error the coach cannot see it (he is never told his pronunciation was off — only the optional acoustic check can say that). One correction per turn means other errors in the same turn are not mentioned. English words are only detected as such when STT writes them in Latin letters (STT may transliterate/translate English into hanzi). Turns longer than 400 hanzi are refused. The coach reply varies (temperature 0.6); the finder is deterministic (temp 0).

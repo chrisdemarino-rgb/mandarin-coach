@@ -27,6 +27,7 @@
 //   recordEvent(name, verdict, detail) / getEvents() / clearEvents()   in-memory ring buffer, also window.__audioEvents + console.debug
 //   getState()
 //   unlock()                        -> Promise<bool>; call inside a tap handler, once. Unlocks <audio>, sets session 'playback'.
+//   prime()                         -> Promise<bool>; call synchronously inside a tap when the clip is still being fetched: keeps playback permission on the shared element.
 //   play(url|Blob)                  -> Promise resolved when 'ended' fired (after which state is armed/idle). Rejects if recording.
 //   stop()                          stop playback now
 //   startRecording()                -> Promise<{mime, sessionType, track}> (resolves once the recorder is actually running)
@@ -254,6 +255,31 @@ export function unlock() {
   return unlockPromise;
 }
 
+// prime(): re-assert playback permission INSIDE a tap, synchronously (no await before it). Used when the clip is not here yet (slow TTS fetch):
+// the tap starts a tiny silent clip on the shared <audio> element so iOS keeps treating this element as user-started, and the real clip is
+// then loaded into the SAME element when it arrives (play(src) sets a new src; it never creates another element). Unlike unlock() it does
+// not depend on the `unlocked` flag, and it releases the mic first (a live mic stream must not run across playback anyway: BUG 3).
+// Never touches `state`; our own pause/ended events are attributed to us through own(). Resolves true/false, never rejects.
+let primeTimer = null;
+export function prime() {
+  try {
+    if (!audioEl) init();
+    if (state === 'recording' || state === 'playing') return Promise.resolve(false);
+    if (stream) { stopStream('before-prime'); log('mic released before prime (reopened for next take)'); }
+    if (!streamLive()) setSession('playback');
+    if (!silentUrl) silentUrl = URL.createObjectURL(makeToneWav({ seconds: 0.2, gain: 0 }));
+    own('prime');
+    audioEl.src = silentUrl; audioEl.muted = false; audioEl.volume = 1;
+    audioEl.loop = true;        // keep the element "actively playing" (silence) until the real clip is loaded into it; play()/stop() clear loop
+    const p = audioEl.play();   // synchronous call inside the gesture
+    clearTimeout(primeTimer);
+    primeTimer = setTimeout(() => { if (audioEl.src === silentUrl && state !== 'playing') { audioEl.loop = false; try { audioEl.pause(); } catch (e) {} } }, 25000);   // safety: a fetch that never returns must not leave a silent loop running
+    return Promise.race([Promise.resolve(p), new Promise((_, rej) => setTimeout(() => rej(new Error('prime play() did not settle in 2 s')), 2000))])
+      .then(() => { unlocked = true; recordEvent('prime', 'ours', 'silent clip started'); return true; },
+        (e) => { recordEvent('prime', 'info', 'play() rejected: ' + (e && e.name)); return false; });
+  } catch (e) { return Promise.resolve(false); }
+}
+
 function onEnded() {
   lastPlaybackEndedAt = Date.now();
   own('playback-ended');
@@ -280,6 +306,7 @@ export async function play(src) {
   let url = src;
   if (src instanceof Blob) { currentObjectUrl = URL.createObjectURL(src); url = currentObjectUrl; }
   own('playback-start');
+  clearTimeout(primeTimer); audioEl.loop = false;   // a prime() silent loop may still be running on this element
   audioEl.src = url;
   audioEl.currentTime = 0;
   const done = new Promise((resolve, reject) => { currentPlayResolve = { resolve, reject }; });
@@ -292,6 +319,7 @@ export async function play(src) {
 export function stop() {
   if (!audioEl) return;
   own('stop');
+  clearTimeout(primeTimer); audioEl.loop = false;
   try { audioEl.pause(); } catch (e) {}
   lastPlaybackEndedAt = Date.now();
   if (state === 'playing') { settlePlay(null); setState(streamLive() ? 'armed' : 'idle'); }
@@ -353,6 +381,7 @@ export async function startRecording() {
   if (state === 'recording') throw new Error('already recording');
   if (state === 'playing' || isSpeaking()) throw new Error('refusing to record while audio is playing (would capture the model voice)');
   if (typeof MediaRecorder === 'undefined') throw new Error('MediaRecorder not supported in this browser');
+  if (audioEl && audioEl.loop) { clearTimeout(primeTimer); audioEl.loop = false; own('stop-prime'); try { audioEl.pause(); } catch (e) {} }   // end a prime() silent loop so it can't count as overlap
   // Let Bluetooth/output buffers drain after the last clip before the mic opens.
   const wait = opts.postPlaybackGuardMs - (Date.now() - lastPlaybackEndedAt);
   if (wait > 0) await new Promise(r => setTimeout(r, wait));

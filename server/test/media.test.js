@@ -37,6 +37,20 @@ test('POST /api/tts: 501 not_configured without keys; mp3 + memory cache with ke
   } finally { await t.close(); }
 });
 
+test('POST /api/tts: identical concurrent requests share ONE provider call (prefetch + tap, double tap)', async () => {
+  const t = await startTestServer(OAI()); await t.login();
+  try {
+    svc.state.ttsDelayMs = 300;
+    const post = (text) => fetch(t.base + '/api/tts', { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: t.cookie() }, body: JSON.stringify({ text }) });
+    const [a, b, c] = await Promise.all([post('他每天早上七点起床。'), post('他每天早上七点起床。'), post('他每天早上七点起床。')]);
+    assert.deepEqual([a.status, b.status, c.status], [200, 200, 200]);
+    const bufs = await Promise.all([a, b, c].map(async (r) => Buffer.from(await r.arrayBuffer())));
+    assert.ok(bufs[0].length > 3 && bufs[0].equals(bufs[1]) && bufs[0].equals(bufs[2]));
+    assert.equal(svc.state.requests.filter((x) => x.url === '/v1/audio/speech').length, 1);
+    assert.equal((await post('他每天早上七点起床。')).headers.get('x-tts-cache'), 'hit');
+  } finally { await t.close(); }
+});
+
 test('GET /api/audio/:id.mp3: auth required, unknown/expired => 404', async () => {
   const t = await startTestServer({ ASSESSMENT_ENGINE: 'mock' }); await t.login();
   try {

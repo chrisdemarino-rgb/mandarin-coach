@@ -6,6 +6,7 @@ import * as api from "./api.js";
 import * as apiQa from "./api-qa.js";
 import { countHanzi as hanCount } from "../shared/script.js";
 import { audio, ensureInit, startAudioFromTap, micError, MicError, RECORDING_PROBLEMS } from "./audio-io.js";
+import * as player from "./tts-player.js";
 
 const MIN_HANZI = 6;   // the backend refuses to ask about shorter chunks (chunks_too_short)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -17,6 +18,7 @@ export function createQa(S) {
     state: "idle", askedTexts: [], chunkIdx: 0, nextChunk: 0, loadFailed: false, chunkText: "", question: null, askedIds: [], number: 0,
     info: null, transcript: "", outcome: null, assessment: null,
     hintsShown: 0, answerShown: false, answerPlaying: false,
+    answerPhase: "idle", questionPhase: "idle",   // "idle" | "loading" (fetching, button disabled) | "playing" (Stop toggle) | "error" (button says Tap to retry)
     coachLines: [], coachAudio: [], coachPlaying: false, questionPlaying: false,
     statusStage: "", error: null, notice: "", micArmed: false, recStart: 0, recording: null,
     records: [], unsupported: false,
@@ -32,13 +34,13 @@ export function createQa(S) {
   let run = 0, ac = null, attemptId = null, coachChain = Promise.resolve(), discarding = Promise.resolve();
   const alive = (r) => r === run;
   const abortFlow = () => { run++; if (ac) { ac.abort(); ac = null; } coachChain = Promise.resolve(); };
-  const stopAudio = () => { try { audio.stop(); } catch { /* ignore */ } Q.coachPlaying = false; Q.questionPlaying = false; Q.answerPlaying = false; };
+  const stopAudio = () => { try { audio.stop(); } catch { /* ignore */ } Q.coachPlaying = false; Q.questionPlaying = false; Q.answerPlaying = false; Q.answerPhase = "idle"; Q.questionPhase = "idle"; };
   const settings = () => S.store.settings;
   function resetAttempt() {
     Q.info = null; Q.transcript = ""; Q.outcome = null; Q.assessment = null; Q.coachLines = []; Q.coachAudio = []; Q.statusStage = ""; Q.error = null; Q.notice = ""; attemptId = null;
     if (Q.recording && Q.recording.url) URL.revokeObjectURL(Q.recording.url); Q.recording = null;
   }
-  function resetQuestion() { resetAttempt(); Q.hintsShown = 0; Q.answerShown = false; }
+  function resetQuestion() { resetAttempt(); Q.hintsShown = 0; Q.answerShown = false; Q.answerPhase = "idle"; Q.questionPhase = "idle"; }
   async function discardTake() {
     if (audio.getState() === "recording") { try { await audio.stopRecording(); } catch { /* not recording */ } }
     try { audio.markDone(); } catch { /* ignore */ }
@@ -91,31 +93,46 @@ export function createQa(S) {
   async function enterQuestion() {
     abortFlow(); const r = run; ac = new AbortController();
     resetQuestion(); Q.notice = ""; Q.state = "asking"; Q.emit();
-    try { await discarding; if (!alive(r)) return; await playText(r, Q.question.text, "questionPlaying"); }
-    catch (e) { if (!alive(r) || (e && e.name === "AbortError")) return; Q.notice = e.network ? "Couldn't reach the coach voice. Read the question, then tap Record." : "Couldn't play the question audio. Read the question, then tap Record."; }
+    prefetchAnswer();   // the model answer is known now: fetch its audio in the background so a later "Hear answer" tap is instant
+    try { await discarding; if (!alive(r)) return; await playText(r, Q.question.text, "questionPlaying", "questionPhase", { failNotice: (e) => (e.network ? "Couldn't reach the coach voice. Read the question, then tap Record." : "Couldn't play the question audio. Read the question, then tap Record.") }); }
+    catch (e) { if (!alive(r) || (e && e.name === "AbortError")) return; }
     if (!alive(r)) return;
     Q.state = "ready"; Q.emit();
   }
-  async function playText(r, text, flag) {
-    if (!text) return;
-    let blob;
-    try { blob = await api.tts(text, { voice: settings().voice, speed: settings().speed, signal: ac && ac.signal }); }
-    catch (e) {
-      if (e && e.name === "AbortError") return;
-      if (e.status === 501 || e.code === "tts_not_configured") { Q.notice = "The coach voice isn't set up on the server yet. Read the text, then tap Record."; return; }
-      throw e;
-    }
-    if (!alive(r)) return;
-    Q[flag] = true; Q.emit();
-    try { await audio.play(blob); }
-    catch { if (alive(r)) Q.notice = "Couldn't play the audio on this device. Read the text instead."; }
-    finally { Q[flag] = false; }
+  let ttsOff = false;   // the server has no TTS provider: stop prefetching
+  /** Warm the cache for the model answer (known as soon as the question arrives, again when the result arrives) so "Hear answer" plays instantly. */
+  function prefetchAnswer() {
+    const a = Q.answer; if (!a || !a.text || ttsOff) return;
+    player.prefetch(a.text, { voice: settings().voice, speed: settings().speed });
+  }
+  /** Speak `text` through the shared <audio> element (tts-player.js). `phaseKey` = answerPhase | questionPhase drives the button
+   *  (loading -> playing -> idle, or error -> "Tap to retry"). Never throws: failures set the phase + a notice. When called from a tap
+   *  handler it must be called synchronously (no await before it) so the player can prime the element inside the gesture. */
+  async function playText(r, text, flag, phaseKey, { afterFetch, failNotice } = {}) {
+    if (!text || ttsOff) { if (ttsOff && text) Q.notice = "The coach voice isn't set up on the server yet. Read the text, then tap Record."; return; }
+    const setPhase = (p) => {
+      if (!alive(r)) return;
+      Q[phaseKey] = p; Q[flag] = p === "playing"; Q.emit();
+      if (p === "playing" && afterFetch) { const f = afterFetch; afterFetch = null; f(); }
+    };
+    try {
+      await player.speak(text, { voice: settings().voice, speed: settings().speed, signal: ac && ac.signal, isAlive: () => alive(r), onPhase: setPhase });
+      if (alive(r)) { Q[phaseKey] = "idle"; Q[flag] = false; }
+    } catch (e) {
+      if (!alive(r) || (e && e.name === "AbortError")) return;
+      Q[phaseKey] = "error"; Q[flag] = false;
+      if (e && e.kind === "not_configured") { ttsOff = true; Q[phaseKey] = "idle"; Q.notice = "The coach voice isn't set up on the server yet. Read the text, then tap Record."; }
+      else Q.notice = failNotice ? failNotice(e) : "Couldn't play the audio. Tap the button to try again.";
+      console.warn("[qa tts]", e && e.kind, e && e.cause && e.cause.name);
+    } finally { if (afterFetch) { const f = afterFetch; afterFetch = null; if (alive(r)) f(); } }
   }
   /** Replay the question. Never while recording or processing. */
   Q.hear = async () => {
     if (!Q.question || ["listening", "processing", "loading"].includes(Q.state)) return;
-    abortFlow(); const r = run; ac = new AbortController(); stopAudio();
-    try { await playText(r, Q.question.text, "questionPlaying"); } catch { if (alive(r)) Q.notice = "Couldn't play the question."; }
+    if (Q.questionPhase === "loading") return;                                  // button is disabled while loading: no duplicate taps
+    if (Q.questionPhase === "playing") { abortFlow(); stopAudio(); Q.emit(); return; }   // Stop toggle
+    abortFlow(); const r = run; ac = new AbortController(); stopAudio(); Q.notice = "";
+    await playText(r, Q.question.text, "questionPlaying", "questionPhase", { failNotice: () => "Couldn't play the question. Tap Replay question to try again." });
     Q.emit();
   };
 
@@ -127,13 +144,16 @@ export function createQa(S) {
   };
   Q.showAnswer = () => {
     if (!["ready", "result", "asking"].includes(Q.state) || !Q.question || Q.answerShown) return;
-    Q.answerShown = true; if (Q.rec) Q.rec.answerShown = true; Q.emit();
+    Q.answerShown = true; if (Q.rec) Q.rec.answerShown = true; prefetchAnswer(); Q.emit();
   };
   Q.hearAnswer = async () => {
     const a = Q.answer; if (!a || !Q.answerShown || ["listening", "processing"].includes(Q.state)) return;
-    abortFlow(); const r = run; ac = new AbortController(); stopAudio();
-    try { await playText(r, a.text, "answerPlaying"); } catch { if (alive(r)) Q.notice = "Couldn't play the answer audio."; }
-    Q.answerPlaying = false; Q.emit();
+    if (Q.answerPhase === "loading") return;                                    // disabled while loading: no duplicate taps (and no restart of the fetch)
+    if (Q.answerPhase === "playing") { abortFlow(); stopAudio(); Q.emit(); return; }     // Stop toggle
+    // Everything up to player.speak() runs synchronously inside the tap: the player primes the shared <audio> element before its first await.
+    abortFlow(); const r = run; ac = new AbortController(); stopAudio(); Q.notice = "";
+    await playText(r, a.text, "answerPlaying", "answerPhase", { failNotice: () => "Couldn't play the answer audio. Tap \u201CTap to retry\u201D to hear it." });
+    Q.emit();
   };
 
   /* record */
@@ -218,7 +238,7 @@ export function createQa(S) {
     Q.outcome = apiQa.qaOutcome(info);
     const rec = Q.rec;
     if (rec) { rec.attempts++; rec.info = info; rec.hints = Math.max(rec.hints, Q.hintsShown); rec.answerShown = rec.answerShown || Q.answerShown; }
-    Q.state = "result"; Q.emit();
+    Q.state = "result"; prefetchAnswer(); Q.emit();
   }
 
   /** Primary button in 'result': next question. */

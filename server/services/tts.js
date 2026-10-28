@@ -31,6 +31,10 @@ export function createTts(cfg, openai) {
     return Buffer.from(await res.arrayBuffer());
   }
 
+  // In-flight de-duplication: the client prefetches the model answer and the user may tap before that finishes (or tap twice); identical
+  // requests join the ONE provider call instead of starting another (the old code paid for, and waited on, each duplicate). The signal of the caller that
+  // STARTED the call still applies to it (POST /api/tts passes none, so a client giving up never wastes the synthesis; attempt.js passes its own).
+  const inflight = new Map();
   const warmed = new Set();
   return {
     provider, // 'azure' | 'openai' | null
@@ -50,11 +54,20 @@ export function createTts(cfg, openai) {
       const key = crypto.createHash('sha256').update(JSON.stringify([provider, v, sp, text])).digest('hex');
       const hit = cache.get(key);
       if (hit) { cache.delete(key); cache.set(key, hit); return { buf: hit, provider, cached: true }; }
-      const buf = provider === 'azure' ? await azureSpeak({ text, voice: v, speed: sp, signal }) : await openai.speech({ text, voice: v, speed: sp, signal });
-      if (!buf.length) throw new ServiceError('tts_empty', 'TTS returned no audio.', { retryable: true });
-      cache.set(key, buf); bytes += buf.length;
-      while ((cache.size > MAX_ENTRIES || bytes > MAX_BYTES) && cache.size) { const [k, b] = cache.entries().next().value; cache.delete(k); bytes -= b.length; }
-      return { buf, provider, cached: false };
+      let pending = inflight.get(key);
+      const joined = !!pending;
+      if (!pending) {
+        pending = (async () => {
+          const out = provider === 'azure' ? await azureSpeak({ text, voice: v, speed: sp, signal }) : await openai.speech({ text, voice: v, speed: sp, signal });
+          if (!out.length) throw new ServiceError('tts_empty', 'TTS returned no audio.', { retryable: true });
+          cache.set(key, out); bytes += out.length;
+          while ((cache.size > MAX_ENTRIES || bytes > MAX_BYTES) && cache.size) { const [k, b] = cache.entries().next().value; cache.delete(k); bytes -= b.length; }
+          return out;
+        })().finally(() => inflight.delete(key));
+        inflight.set(key, pending);
+      }
+      const buf = await pending;
+      return { buf, provider, cached: false, ...(joined ? { joined: true } : {}) };
     },
   };
 }

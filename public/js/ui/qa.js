@@ -69,8 +69,8 @@ export function initQaUI(Q, S, { onLeave, onSave = () => {} }) {
       $("#qaQuestion").textContent = q.text;
       const py = S.settings.showPinyin !== false ? formatPinyin(q.pinyin) : "";
       $("#qaPinyin").textContent = py; $("#qaPinyin").hidden = !py;
-      $("#btnQaHear").disabled = busy;
-      $("#btnQaHear").textContent = Q.questionPlaying ? "\u25A0 Playing…" : "\u{1F50A} Replay question";
+      $("#btnQaHear").disabled = busy || Q.questionPhase === "loading";   // no duplicate taps while the audio loads
+      $("#btnQaHear").textContent = Q.questionPhase === "loading" ? "Loading audio…" : Q.questionPhase === "error" ? "Tap to retry" : Q.questionPlaying ? "\u25A0 Stop" : "\u{1F50A} Replay question";
       const nt = $("#qaNotice"); nt.hidden = !Q.notice; nt.textContent = Q.notice;
       const hints = Q.hints, shown = hints.slice(0, Q.hintsShown);
       $("#qaHints").hidden = !shown.length;
@@ -85,8 +85,8 @@ export function initQaUI(Q, S, { onLeave, onSave = () => {} }) {
       if (ans) {
         $("#qaAnswerText").textContent = ans.text;
         $("#qaAnswerFrom").textContent = ans.from === "script" ? "(from your script)" : "";
-        $("#btnQaHearAnswer").disabled = busy;
-        $("#btnQaHearAnswer").textContent = Q.answerPlaying ? "\u25A0 Playing…" : "\u{1F50A} Hear answer";
+        $("#btnQaHearAnswer").disabled = busy || Q.answerPhase === "loading";   // no duplicate taps while the audio loads
+        $("#btnQaHearAnswer").textContent = Q.answerPhase === "loading" ? "Loading audio…" : Q.answerPhase === "error" ? "Tap to retry" : Q.answerPlaying ? "\u25A0 Stop" : "\u{1F50A} Hear answer";
       }
     }
 

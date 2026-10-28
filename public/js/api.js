@@ -82,15 +82,35 @@ export const words = {
 
 /* ---------------- tts / cues ---------------- */
 const ttsCache = new Map(); // "voice|speed|text" -> Blob (small LRU)
-/** Model/coach voice for `text` (<= 500 chars). Returns an audio/mpeg Blob. Never upload this to /api/attempt. */
-export async function tts(text, { voice, speed, signal } = {}) {
-  const key = `${voice || ""}|${speed || 1}|${text}`;
-  if (ttsCache.has(key)) { const b = ttsCache.get(key); ttsCache.delete(key); ttsCache.set(key, b); return b; }
-  const res = await req("POST", "/api/tts", { json: { text, ...(voice ? { voice } : {}), ...(speed ? { speed } : {}) }, signal });
-  const blob = await res.blob();
-  ttsCache.set(key, blob);
-  if (ttsCache.size > 40) ttsCache.delete(ttsCache.keys().next().value);
-  return blob;
+const ttsInflight = new Map(); // same key -> Promise<Blob> of the ONE request in flight (shared by prefetch + taps; never carries a caller's AbortSignal)
+const ttsKey = (text, { voice, speed } = {}) => `${voice || ""}|${speed || 1}|${text}`;
+/** Synchronous cache peek (Blob | null). Lets a tap handler start playback inside the user gesture when the audio is already here. */
+export function ttsPeek(text, o = {}) { const b = ttsCache.get(ttsKey(text, o)); return b || null; }
+const abortable = (p, signal) => !signal ? p : new Promise((resolve, reject) => {
+  const onAbort = () => reject(Object.assign(new Error("Aborted"), { name: "AbortError" }));
+  if (signal.aborted) return onAbort();
+  signal.addEventListener("abort", onAbort, { once: true });
+  p.then((v) => { signal.removeEventListener("abort", onAbort); resolve(v); }, (e) => { signal.removeEventListener("abort", onAbort); reject(e); });
+});
+/** Model/coach voice for `text` (<= 500 chars). Returns an audio/mpeg Blob. Never upload this to /api/attempt.
+ *  The network request is shared per key: a second call (prefetch, double tap, retry) joins the request already in flight instead of
+ *  restarting it, and `signal` only stops THIS caller from waiting (it no longer cancels the shared request). */
+export function tts(text, { voice, speed, signal } = {}) {
+  const key = ttsKey(text, { voice, speed });
+  if (ttsCache.has(key)) { const b = ttsCache.get(key); ttsCache.delete(key); ttsCache.set(key, b); return Promise.resolve(b); }
+  let p = ttsInflight.get(key);
+  if (!p) {
+    p = (async () => {
+      const res = await req("POST", "/api/tts", { json: { text, ...(voice ? { voice } : {}), ...(speed ? { speed } : {}) } });
+      const blob = await res.blob();
+      ttsCache.set(key, blob);
+      if (ttsCache.size > 40) ttsCache.delete(ttsCache.keys().next().value);
+      return blob;
+    })().finally(() => ttsInflight.delete(key));
+    ttsInflight.set(key, p);
+    p.catch(() => {}); // a prefetch nobody awaits must not raise an unhandled rejection
+  }
+  return abortable(p, signal);
 }
 
 const cueCache = new Map(); // "level|text" -> promise<{level,cue,items?,source}>

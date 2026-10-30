@@ -379,7 +379,7 @@ Response (the whole object minus `ok`, `questionPinyin`, `questionAudio`, `timin
 - `keyPoints`: 1-3 short ideas an answer must contain. `textZh` is the exact reference text; `refStart/refEnd` are **code-point** offsets into chunk `chunkIndex` (== the `chunks[]` index you sent) **resolved by the server** (the LLM only quotes; unresolvable/invented quotes are dropped; spans never cross a sentence end). Highlight with `Array.from(chunk).slice(refStart, refEnd)`.
 - `questionId` is deterministic (`q` + hash of question + key points): the same question gets the same id. `signature` = HMAC-SHA256 (key derived from `SESSION_SECRET`/`APP_PASSCODE`) over `questionId, type, level, questionZh, modelAnswerZh, hintZh, sourceChunkIndex, keyPoints[id,textZh,refStart,refEnd,chunkIndex]` — a changed or foreign payload gets `400 invalid_question_signature`; a malformed one `400 invalid_question`. Ids/signatures stay valid across restarts as long as the secret is unchanged; changing `APP_PASSCODE`/`SESSION_SECRET` invalidates all in-flight questions (ask for a new one).
 - `repeated:true` (only then present): the model could not find a question different from `avoid` after one retry; show it or call `/next` again.
-- Errors: `400 invalid_chunks|stage_directions_in_chunk|chunks_too_short|invalid_type|invalid_level|invalid_avoid|invalid_chunk_index`, `413 script_too_long` (> 2000 hanzi in total), `503 llm_not_configured`, **`502 question_generation_failed`** (no question with a grounded key point after 2 LLM tries; message names the reason: `no_grounded_key_point|malformed_output|...`; just retry).
+- Errors: `400 invalid_chunks|stage_directions_in_chunk|chunks_too_short|invalid_type|invalid_level|invalid_avoid|invalid_chunk_index`, `413 script_too_long` (> 3000 hanzi in total; was 2000 until 2026-10-30; up to 200 chunks, each still ≤ 100 chars for TonePerfect), `503 llm_not_configured`, **`502 question_generation_failed`** (no question with a grounded key point after 2 LLM tries; message names the reason: `no_grounded_key_point|malformed_output|...`; just retry).
 
 ## POST /api/qa/hint   (JSON: the question payload, optional `"hintLevel": 1|2`; no LLM)
 ```
@@ -624,3 +624,31 @@ Strict schema check by code; items that break a rule (Latin in the Chinese field
 
 ### Free talk limits (documented)
 Corrections are text-only judgements by an LLM with code guards: a wrong-but-grammatical phrase can slip through (no correction is the safe default), and when STT autocorrects a real error the coach cannot see it (he is never told his pronunciation was off — only the optional acoustic check can say that). One correction per turn means other errors in the same turn are not mentioned. English words are only detected as such when STT writes them in Latin letters (STT may transliterate/translate English into hanzi). Turns longer than 400 hanzi are refused. The coach reply varies (temperature 0.6); the finder is deterministic (temp 0).
+
+## Script-grounded Free talk (added 2026-10-30)
+Optional **`script`** (string, the learner's whole script, ≤ **3000** characters = code points after NFC/trim) in `/api/talk/turn` `context`, and in the JSON body of `/api/talk/opening` and `/api/talk/summary`. Over 3000 => **HTTP 413 `{"error":{"code":"script_too_long"}}`** (same code as `/api/qa/next`, which counts > 3000 hanzi). Non-string => `400 invalid_context`. Sent to the LLM for that request only; never stored. `scriptVocab` keeps working unchanged. The turn `context` multipart field limit is now 64 KB (`413 context_too_large` above).
+- With a script: the opening asks about the script's main topic / argument (`/api/talk/opening` response adds `scriptUsed: true`); follow-up questions focus on the script's topics, reasoning and conclusions; if the learner drifts, the reply reacts briefly and the question steers back. The summary judges how the script's ideas were conveyed.
+- Without a script: behaviour unchanged.
+
+New `done` fields of `/api/talk/turn` (always present):
+```json
+{
+  "replyZh": "听起来很不错！", "questionZh": "你最喜欢吃什么水果？",
+  "replyPinyin": "tīng qǐ lái hěn bú cuò！", "questionPinyin": "nǐ zuì xǐ huan chī shén me shuǐ guǒ？",
+  "onTopic": true,
+  "upgrade": {
+    "said": "我想学中文最重要是每天练习。",
+    "better": "我觉得学习中文最重要的是每天坚持练习。",
+    "betterPinyin": "wǒ jué de xué xí zhōng wén zuì zhòng yào de shì měi tiān jiān chí liàn xí。",
+    "changes": [{ "from": "我想", "to": "我觉得", "fromStart": 0, "fromEnd": 2, "toStart": 0, "toEnd": 3, "kind": "word_choice", "note": "Script wording." }],
+    "sourceLines": [{ "text": "我觉得学习中文最重要的是每天坚持练习。", "start": 0, "end": 19 }]
+  },
+  "upgradeStatus": "ok",
+  "saveable": [{ "text": "我觉得", "pinyin": "wǒ jué de", "meaning": null, "sourceChunk": "我觉得学习中文最重要的是每天坚持练习。" }]
+}
+```
+- `replyPinyin` / `questionPinyin`: pinyin-pro (code, tone sandhi applied) of `replyZh` / `questionZh`; `null` when those are null.
+- `onTopic`: `true|false` from the reply LLM (is what the learner just said about the script's topics); `null` without a script, on the gate, or if the model omitted it.
+- `upgrade` ("say it like your script"; never spoken, UI text only, no tone claims): from a 3rd parallel LLM call (temp 0, only when a script is sent) so the first audio is not delayed; `done` waits for it at most `TALK_UPGRADE_MAX_MS` (9 s) from its start. Code validation: `said` must be a substring of the transcript (else the transcript); every `sourceLines` item must be a VERBATIM substring of the script (others dropped; `start`/`end` = code points into the script, end exclusive; `chunkIndex` is not sent — the server has the script text only); every change needs `from` ⊂ `said` and `to` ⊂ `better` (others dropped); offsets are code points, end exclusive (`fromStart/fromEnd` into `said`, `toStart/toEnd` into `better`); `kind`/`note` optional. Grounding: hanzi in `better` that are in neither `said`, the kept `sourceLines`, nor a small function-word list => if more than 1 and > 15 % of `better`'s hanzi => dropped as `ungrounded`.
+- `upgradeStatus`: `ok` | `none` (no useful/valid upgrade, or off-topic) | `ungrounded` (invented content dropped) | `unavailable` (LLM failed/timeout; nothing made up; `summary.upgradeReason`) | `no_script` | `skipped` (gate, with a script).
+- `saveable`: from the changes' `to` (≤ 20 chars, deduped), shaped for `POST /api/words` `{text, pinyin, meaning, sourceChunk}` (sourceChunk = first source line or `better`, ≤ 200). Not auto-saved. `POST /api/words` has no `reason` field (not added: there is no column for it; unknown fields are ignored).

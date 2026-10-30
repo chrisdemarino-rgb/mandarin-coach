@@ -7,7 +7,7 @@ import os from 'node:os';
 import { startTestServer, fixtureEngine } from './helpers.js';
 import { startFakeToneperfect } from './fake-toneperfect.js';
 import { startFakeServices } from './fake-services.js';
-import { parseTalkContext, validateFind, validateSummary, validateOpening, talkGate, talkStats, parseScriptVocab, cleanReplySentences, TalkSchemaError,
+import { parseTalkContext, validateFind, validateSummary, validateOpening, talkGate, talkStats, parseScriptVocab, cleanReplySentences, TalkSchemaError, validateUpgrade, upgradeSaveable, parseScript, TALK_MAX_SCRIPT_CHARS,
   TALK_GATE_ZH, TALK_FALLBACK_ZH, TALK_THEN_ZH, TALK_NATURAL_ZH, TALK_MAX_TURNS, TALK_MAX_TURN_CHARS, TALK_MAX_CONTEXT_CHARS } from '../services/talk.js';
 
 const TP_KEY = 'tp_test_FAKEKEYFORTESTS0123456789'; const OAI_KEY = 'sk-fakeopenaikey0123456789';
@@ -30,15 +30,15 @@ const SAID = '我昨天去商店买了一个很多苹果，然后我回家。';
 const REPLY = (over = {}) => ({ replyZh: '听起来很不错！', questionZh: '你最喜欢吃什么水果？', ...over });
 const FIND = (over = {}) => ({ correction: null, vocabHints: [], natural: false, ...over });
 const GOOD_FIX = { kind: 'word_choice', quote: '一个很多苹果', betterZh: '很多苹果', explainZh: '“很多”前面不用“一个”。', confidence: 'high' };
-const marker = (j) => /TALK_(REPLY|FIND|OPEN|SUMMARY)/.exec(j.messages[0].content)?.[1];
+const marker = (j) => /TALK_(REPLY|FIND|OPEN|SUMMARY|UPGRADE)/.exec(j.messages[0].content)?.[1];
 const OPEN = { textZh: '这个周末你想做什么？' };
 const SUMMARY = (over = {}) => ({
   takeaways: [{ textEn: 'You described what you bought and where you went.', textZh: '我去商店买了苹果。' }, { textEn: 'You linked two actions with 然后.', textZh: '然后我回家。' }, { textEn: 'You kept the topic going.', textZh: '我的周末很有意思。' }],
   newWords: [{ text: '水果', meaning: 'fruit', exampleZh: '我喜欢吃水果。' }], phrasesToTry: [{ zh: '我买了很多苹果。', en: 'I bought a lot of apples.', whyEn: 'Natural way to say a large amount.' }],
   strengths: ['Clear sequence of events.'], ...over });
 /** LLM fake selected by the system-prompt marker; any entry may be a function(request) or a raw string (to send malformed output). */
-const llm = ({ reply = REPLY(), find = FIND(), open = OPEN, summary = SUMMARY() } = {}) => (j) => {
-  const v = { REPLY: reply, FIND: find, OPEN: open, SUMMARY: summary }[marker(j)]; const x = typeof v === 'function' ? v(j) : v;
+const llm = ({ reply = REPLY(), find = FIND(), open = OPEN, summary = SUMMARY(), upgrade = { upgrade: null } } = {}) => (j) => {
+  const v = { REPLY: reply, FIND: find, OPEN: open, SUMMARY: summary, UPGRADE: upgrade }[marker(j)]; const x = typeof v === 'function' ? v(j) : v;
   return typeof x === 'string' ? x : JSON.stringify(x);
 };
 const ctxOf = (over = {}) => ({ topic: TOPIC, turns: [{ role: 'coach', text: '周末你做了什么？' }], ...over });
@@ -283,7 +283,7 @@ test('TURN validation: auth required, missing audio, bad/missing context, bad at
       [{ headers: { 'X-Audio-Source': 'tts' } }, 'tts_audio_rejected']];
     for (const [o, code] of cases) { const r = await postTurn(t, o); assert.equal(r.status, 400, code); assert.equal(r.json.error.code, code); }
     const big = await postTurn(t, { audio: Buffer.alloc(10 * 1024 * 1024 + 10) }); assert.equal(big.status, 413); assert.equal(big.json.error.code, 'upload_too_large');
-    const bigCtx = await postTurn(t, { rawContext: JSON.stringify({ topic: 'x', filler: 'x'.repeat(40 * 1024) }) }); assert.equal(bigCtx.status, 413); assert.equal(bigCtx.json.error.code, 'context_too_large');
+    const bigCtx = await postTurn(t, { rawContext: JSON.stringify({ topic: 'x', filler: 'x'.repeat(70 * 1024) }) }); assert.equal(bigCtx.status, 413); assert.equal(bigCtx.json.error.code, 'context_too_large');
     const manyVocab = await postTurn(t, { ctx: ctxOf({ scriptVocab: Array.from({ length: 300 }, (_, i) => ({ text: '词' + i })) }) }); assert.equal(manyVocab.status, 413);
     assert.equal(chatCalls(), 0); assert.equal(tp.requests.length, 0);
   } finally { await t.close(); await anon.close(); }
@@ -343,4 +343,75 @@ test('SUMMARY: strict JSON -> takeaways / newWords / phrasesToTry / strengths + 
 test('PREFS: practiceMode "free_talk" is accepted (own endpoints /api/talk/*); /api/attempt still has no such mode', async () => {
   const t = await server(envOai());
   try { assert.equal((await t.api('PUT', '/api/prefs', { practiceMode: 'free_talk' })).status, 200); assert.equal((await t.api('GET', '/api/prefs')).json.practiceMode, 'free_talk'); } finally { await t.close(); }
+});
+
+// ------------------------------------------------------------------------------------------------ script-grounded Free talk (context.script, onTopic, upgrade, pinyin)
+const SCRIPT = '我觉得学习中文最重要的是每天坚持练习。因为只有每天说，才能慢慢提高口语。所以我的结论是：坚持比天赋更重要。';
+const SAID2 = '我想学中文最重要是每天练习。';
+const GOOD_UP = { upgrade: { said: SAID2, better: '我觉得学习中文最重要的是每天坚持练习。',
+  changes: [{ from: '我想', to: '我觉得', kind: 'word_choice', note: 'Script wording.' }, { from: '学中文', to: '学习中文' }, { from: '最重要是', to: '最重要的是', kind: 'grammar' }, { from: '每天练习', to: '每天坚持练习' }, { from: '不存在', to: '我觉得' }, { from: '我想', to: '没出现' }],
+  sourceLines: ['我觉得学习中文最重要的是每天坚持练习。', '这句话不在脚本里。'] } };
+const sctx = (over = {}) => ctxOf({ script: SCRIPT, ...over });
+
+test('parseScript / TALK_MAX_SCRIPT_CHARS: 3000 accepted, 3001 => 413 script_too_long; non-string => invalid_context', () => {
+  assert.equal(TALK_MAX_SCRIPT_CHARS, 3000);
+  assert.equal(parseScript('好'.repeat(3000)).script.length, 3000); assert.equal(parseScript(undefined).script, '');
+  assert.deepEqual([parseScript('好'.repeat(3001)).error.status, parseScript('好'.repeat(3001)).error.code], [413, 'script_too_long']);
+  assert.equal(parseScript(5).error.code, 'invalid_context');
+  assert.equal(parseTalkContext(JSON.stringify({ script: '好'.repeat(3001) })).error.code, 'script_too_long'); assert.equal(parseTalkContext(JSON.stringify({ script: SCRIPT })).ctx.script, SCRIPT);
+});
+test('validateUpgrade: grounded upgrade kept with code-point offsets; hallucinated sourceLines and unverifiable changes dropped; invented content => ungrounded; null / no change => none', () => {
+  const v = validateUpgrade(GOOD_UP, { transcript: SAID2, script: SCRIPT }); const u = v.upgrade;
+  assert.equal(v.status, 'ok'); assert.equal(u.said, SAID2); assert.equal(u.betterPinyin.split(' ')[0], 'wǒ');
+  assert.deepEqual(u.sourceLines, [{ text: '我觉得学习中文最重要的是每天坚持练习。', start: 0, end: 19 }]); assert.ok(v.dropped.includes('sourceLine_not_in_script'));
+  assert.equal(u.changes.length, 4); assert.ok(v.dropped.includes('change_from_not_in_said')); assert.ok(v.dropped.includes('change_to_not_in_better'));
+  for (const c of u.changes) { assert.equal(Array.from(u.said).slice(c.fromStart, c.fromEnd).join(''), c.from); assert.equal(Array.from(u.better).slice(c.toStart, c.toEnd).join(''), c.to); }
+  assert.deepEqual(u.changes[0], { from: '我想', to: '我觉得', fromStart: 0, fromEnd: 2, toStart: 0, toEnd: 3, kind: 'word_choice', note: 'Script wording.' });
+  const sl = validateUpgrade({ upgrade: { ...GOOD_UP.upgrade, sourceLines: ['所以我的结论是：坚持比天赋更重要。'] } }, { transcript: SAID2, script: SCRIPT }).upgrade.sourceLines[0];
+  assert.equal(Array.from(SCRIPT).slice(sl.start, sl.end).join(''), sl.text);
+  const inv = validateUpgrade({ upgrade: { said: SAID2, better: '我觉得学中文最重要是每天去公园跑步练习。', changes: [{ from: '我想', to: '我觉得' }], sourceLines: [] } }, { transcript: SAID2, script: SCRIPT });
+  assert.equal(inv.status, 'ungrounded'); assert.equal(inv.upgrade, null);
+  assert.equal(validateUpgrade({ upgrade: null }, { transcript: SAID2, script: SCRIPT }).status, 'none');
+  assert.equal(validateUpgrade({ upgrade: { said: SAID2, better: SAID2, changes: [] } }, { transcript: SAID2, script: SCRIPT }).status, 'none');
+  assert.equal(validateUpgrade({ upgrade: { said: SAID2, better: 'I think 学习', changes: [] } }, { transcript: SAID2, script: SCRIPT }).status, 'none');
+  assert.throws(() => validateUpgrade({}, { transcript: SAID2, script: SCRIPT }), TalkSchemaError);
+  const sv = upgradeSaveable(u); assert.deepEqual(sv[0], { text: '我觉得', pinyin: 'wǒ jué de', meaning: null, sourceChunk: '我觉得学习中文最重要的是每天坚持练习。' });
+  assert.ok(sv.every((x) => Array.from(x.text).length <= 100 && x.sourceChunk.length <= 200)); assert.deepEqual(upgradeSaveable(null), []);
+});
+test('TURN with script: grounded upgrade in done (not spoken), saveable phrases POSTable to /api/words, onTopic, pinyin aligned; prompts carry the script; nothing stored', async () => {
+  const t = await server(envOai());
+  try {
+    const r = await turn(t, { stt: SAID2, script: llm({ reply: REPLY({ onTopic: true }), upgrade: GOOD_UP }), ctx: sctx() });
+    assert.equal(r.status, 200); const d = done(r);
+    assert.equal(d.upgradeStatus, 'ok'); assert.equal(d.upgrade.better, '我觉得学习中文最重要的是每天坚持练习。'); assert.equal(d.upgrade.sourceLines.length, 1); assert.equal(d.upgrade.changes.length, 4);
+    assert.equal(d.onTopic, true); assert.equal(d.replyPinyin, 'tīng qǐ lái hěn bú cuò！'); assert.equal(d.questionPinyin, 'nǐ zuì xǐ huan chī shén me shuǐ guǒ？');
+    assert.ok(!lines(r).join('').includes('我觉得学习中文')); // upgrade is UI text only, never spoken
+    assert.deepEqual(d.saveable.map((x) => x.text), ['我觉得', '学习中文', '最重要的是', '每天坚持练习']);
+    const reqs = svc.state.requests.filter((x) => x.url === '/v1/chat/completions');
+    const byM = (m) => reqs.find((x) => marker(x.json) === m).json;
+    assert.match(byM('REPLY').messages[0].content, /SCRIPT MODE/); assert.ok(byM('REPLY').messages[1].content.includes(SCRIPT)); assert.ok(byM('UPGRADE').messages[1].content.includes(SCRIPT));
+    assert.equal(reqs.length, 3);
+    const w = await t.api('POST', '/api/words', d.saveable[0]); assert.ok(w.status === 200 || w.status === 201, w.text); assert.equal((await t.api('GET', '/api/words')).json.words?.[0]?.text ?? '我觉得', '我觉得');
+    const r2 = await turn(t, { stt: '我昨天去看电影了，很好看。', script: llm({ reply: REPLY({ questionZh: '说回你的脚本：你为什么觉得坚持很重要？', onTopic: false }) }), ctx: sctx() });
+    const d2 = done(r2); assert.equal(d2.onTopic, false); assert.equal(d2.upgradeStatus, 'none'); assert.equal(d2.upgrade, null); assert.deepEqual(d2.saveable, []);
+  } finally { await t.close(); }
+});
+test('TURN upgrade statuses: no script => no_script (2 LLM calls, onTopic null); invented content => ungrounded; failing upgrade LLM => unavailable (reply unaffected); gate => skipped; 3001-char script => 413', async () => {
+  const t = await server(envOai());
+  try {
+    let d = done(await turn(t, { stt: SAID2, script: llm({ upgrade: GOOD_UP }) })); assert.equal(d.upgradeStatus, 'no_script'); assert.equal(d.upgrade, null); assert.equal(d.onTopic, null); assert.equal(chatCalls(), 2);
+    assert.equal(typeof d.replyPinyin, 'string'); assert.equal(typeof d.questionPinyin, 'string');
+    d = done(await turn(t, { stt: SAID2, ctx: sctx(), script: llm({ upgrade: { upgrade: { said: SAID2, better: '我觉得学中文最重要是每天去公园跑步练习。', changes: [{ from: '我想', to: '我觉得' }], sourceLines: ['这不是脚本'] } } }) }));
+    assert.equal(d.upgradeStatus, 'ungrounded'); assert.equal(d.upgrade, null); assert.deepEqual(d.saveable, []);
+    d = done(await turn(t, { stt: SAID2, ctx: sctx(), script: llm({ upgrade: 'not json at all' }) })); assert.equal(d.upgradeStatus, 'unavailable'); assert.equal(d.replyZh, '听起来很不错！'); assert.equal(d.summary.upgradeReason, 'malformed_output');
+    d = done(await turn(t, { stt: '', ctx: sctx() })); assert.equal(d.upgradeStatus, 'skipped'); assert.equal(d.replyPinyin, null);
+    assert.equal((await turn(t, { stt: SAID2, ctx: sctx({ script: '好'.repeat(3000) }) })).status, 200);
+    const big = await turn(t, { ctx: sctx({ script: '好'.repeat(3001) }) }); assert.equal(big.status, 413); assert.equal(big.json.error.code, 'script_too_long');
+    svc.state.chatScript = llm();
+    let o = await t.api('POST', '/api/talk/opening', { topic: TOPIC, script: SCRIPT }); assert.equal(o.status, 200); assert.equal(o.json.scriptUsed, true); assert.ok(svc.state.requests.at(-1).json.messages[1].content.includes(SCRIPT));
+    o = await t.api('POST', '/api/talk/opening', { topic: TOPIC, script: '好'.repeat(3001) }); assert.deepEqual([o.status, o.json.error.code], [413, 'script_too_long']);
+    const turns = [{ role: 'coach', text: '你好' }, { role: 'user', text: SAID2 }];
+    o = await t.api('POST', '/api/talk/summary', { topic: TOPIC, turns, script: SCRIPT }); assert.equal(o.status, 200, o.text); assert.ok(svc.state.requests.at(-1).json.messages[1].content.includes(SCRIPT));
+    o = await t.api('POST', '/api/talk/summary', { topic: TOPIC, turns, script: '好'.repeat(3001) }); assert.deepEqual([o.status, o.json.error.code], [413, 'script_too_long']);
+  } finally { await t.close(); }
 });

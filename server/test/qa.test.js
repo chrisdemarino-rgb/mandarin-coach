@@ -121,12 +121,12 @@ test('NEXT request validation: clear 400/413 errors (chunks, stage directions, s
     const code = async (body) => { const r = await next(t, body); return [r.status, r.json.error.code]; };
     assert.deepEqual(await code({}), [400, 'invalid_chunks']); assert.deepEqual(await code({ chunks: [] }), [400, 'invalid_chunks']); assert.deepEqual(await code({ chunks: [5] }), [400, 'invalid_chunks']);
     assert.deepEqual(await code({ chunks: [CHUNK, '[停顿] 你好'] }), [400, 'stage_directions_in_chunk']);
-    assert.deepEqual(await code({ chunks: ['你'.repeat(2001)] }), [413, 'script_too_long']); assert.deepEqual(await code({ chunks: Array(81).fill('好') }), [400, 'invalid_chunks']);
+    assert.deepEqual(await code({ chunks: ['你'.repeat(3001)] }), [413, 'script_too_long']); assert.deepEqual(await code({ chunks: Array(201).fill('好') }), [400, 'invalid_chunks']);
     assert.deepEqual(await code({ chunks: ['你好。', '谢谢'] }), [400, 'chunks_too_short']);
     assert.deepEqual(await code({ chunks: [CHUNK], type: 'when' }), [400, 'invalid_type']); assert.deepEqual(await code({ chunks: [CHUNK], level: 3 }), [400, 'invalid_level']);
     assert.deepEqual(await code({ chunks: [CHUNK], avoid: 'x' }), [400, 'invalid_avoid']); assert.deepEqual(await code({ chunks: [CHUNK], avoid: ['a'.repeat(121)] }), [400, 'invalid_avoid']);
     assert.deepEqual(await code({ chunks: [CHUNK, '你好。'], chunkIndex: 1 }), [400, 'invalid_chunk_index']);
-    assert.equal((await next(t, { chunks: [CHUNK + '好'.repeat(1980)] })).status, 200); assert.equal(chatCalls(), 1); // 2000 hanzi is allowed; the earlier requests never reached the LLM
+    assert.equal((await next(t, { chunks: [CHUNK + '好'.repeat(2980)] })).status, 200); assert.equal(chatCalls(), 1); // 3000 hanzi is allowed; the earlier requests never reached the LLM
   } finally { await t.close(); }
   const t2 = await server({ TONEPERFECT_API_KEY: TP_KEY, TONEPERFECT_BASE_URL: tp.baseUrl, ASSESSMENT_ENGINE: 'toneperfect' });
   try { const r = await next(t2); assert.equal(r.status, 503); assert.equal(r.json.error.code, 'llm_not_configured'); } finally { await t2.close(); }

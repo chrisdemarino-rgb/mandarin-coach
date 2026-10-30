@@ -14,8 +14,8 @@ import { questionIdOf, QA_TYPES } from '../lib/qa-sign.js';
 export const MAX_KEY_POINTS = 3;
 export const MAX_QA_CORRECTIONS = 2;
 export const QA_MIN_CHUNK_HANZI = 6;
-export const QA_MAX_SCRIPT_HANZI = 2000;
-export const QA_MAX_CHUNKS = 80;
+export const QA_MAX_SCRIPT_HANZI = 3000;   // whole script (all chunks), hanzi; was 2000 (app script limit raised to 3000 chars 2026-10-30)
+export const QA_MAX_CHUNKS = 200;
 
 // ---------------------------------------------------------------------------------------------------------------- fixed spoken lines (pre-warmed in TTS)
 const ZH_N = ['', '一', '二', '三', '四'];

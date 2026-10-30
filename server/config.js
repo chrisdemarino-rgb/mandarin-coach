@@ -58,6 +58,7 @@ export const ASSESSMENT_POLICY = Object.freeze({
   TALK_MAX_TRANSCRIPT_HANZI: 400,   // longer turns are refused (talk_turn_too_long); the optional tone check additionally needs <= 100 hanzi
   TALK_REPLY_MAX_MS: 12000,         // wall-clock cap of the streamed reply call incl. its one retry
   TALK_FIND_WAIT_MS: 3500,          // after the reply is fully spoken-queued, wait at most this long (from the finder's start) for the correction finder before the follow-up question is queued
+  TALK_UPGRADE_MAX_MS: 9000,        // hard cap of the script-grounded upgrade call (3rd parallel LLM call, only with context.script); done waits for it at most this long from its start
   TALK_FIND_MAX_MS: 8000,           // hard cap of the correction finder incl. its one retry; later => no correction
   TALK_TONE_WAIT_MS: 3000,          // optional (tone:true) TonePerfect check of the transcript; later => tone skipped
   TALK_OPENING_MAX_MS: 8000,        // /api/talk/opening LLM cap incl. retry

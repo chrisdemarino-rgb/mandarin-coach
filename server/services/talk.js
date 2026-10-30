@@ -23,6 +23,7 @@ export const TALK_MAX_CONTEXT_CHARS = 2400;   // all turns together (oldest drop
 export const TALK_MAX_VOCAB = 40;             // script vocabulary entries used
 export const TALK_MAX_VOCAB_SENT = 200;       // more than this => 400
 export const TALK_MAX_TOPIC = 120;
+export const TALK_MAX_SCRIPT_CHARS = 3000;   // optional `script` text (code points; same limit as the app's script box) => 413 script_too_long
 export const TALK_SUMMARY_MAX_TURNS_SENT = 200;
 export const TALK_SUMMARY_MAX_CHARS_SENT = 20000;
 export const TALK_SUMMARY_PROMPT_TURNS = 40;  // the last N turns / chars go to the LLM
@@ -73,7 +74,18 @@ export function parseTalkContext(raw) {
   let used = turns.slice(-TALK_MAX_TURNS); let chars = used.reduce((n, t) => n + cpLen(t.text), 0);
   while (used.length > 1 && chars > TALK_MAX_CONTEXT_CHARS) { chars -= cpLen(used[0].text); used = used.slice(1); }
   const vocab = parseScriptVocab(c.scriptVocab); if (vocab.error) return { error: vocab.error };
-  return { ctx: { topic, level: c.level || 'normal', tone: c.tone === true, turns: used, turnsSent: turns.length, turnsUsed: used.length, scriptVocab: vocab.list } };
+  const sc = parseScript(c.script); if (sc.error) return { error: sc.error };
+  return { ctx: { topic, level: c.level || 'normal', tone: c.tone === true, turns: used, turnsSent: turns.length, turnsUsed: used.length, scriptVocab: vocab.list, script: sc.script } };
+}
+
+/** optional script text -> { script } | { error }. Not stored anywhere; only sent to the LLM for this request. */
+export function parseScript(v) {
+  if (v == null || v === '') return { script: '' };
+  if (typeof v !== 'string') return { error: { status: 400, code: 'invalid_context', message: 'script must be a string.' } };
+  const script = v.normalize('NFC').replace(/\r\n?/g, '\n').trim();
+  const n = cpLen(script);
+  if (n > TALK_MAX_SCRIPT_CHARS) return { error: { status: 413, code: 'script_too_long', message: `The script is over ${TALK_MAX_SCRIPT_CHARS} characters (${n}).` } };
+  return { script };
 }
 
 /** scriptVocab: [{text, pinyin?}] (or plain strings) -> unique entries of 1-12 hanzi, at most TALK_MAX_VOCAB; > TALK_MAX_VOCAB_SENT entries => error. Pinyin is always computed by code. */
@@ -113,6 +125,12 @@ export function buildReplyMessages({ ctx, transcript }) {
 {"replyZh": string, "questionZh": string}
 replyZh: ONE short, warm, natural reaction or comment about the CONTENT of what the learner just said (a few characters up to ~20; may be empty only if they said almost nothing). questionZh: ONE natural follow-up question about the topic that invites them to say more.
 RULES: simplified Chinese only, no pinyin, no English, no markdown, no emojis. ${levelNote(ctx.level)} Total 1-3 short sentences. Do NOT correct or evaluate the learner's language, do NOT praise their Chinese, and NEVER mention pronunciation, tones, pitch or how anything sounded (you only have a text transcript, which may contain speech-to-text mistakes). If the learner mixed in English or said they do not know how to say something, just answer the meaning naturally. If the transcript looks garbled, ask them kindly to say it another way. Do not repeat their sentence word for word.`;
+  if (ctx.script) {
+    const sys2 = `${system}
+SCRIPT MODE: the learner is practising to talk about their own SCRIPT (given in the user message). Your questionZh must be about the script's topics, its argument / reasoning (why, how, what follows) and its conclusions, so the learner practises expressing those ideas in their own words. If what the learner just said is NOT related to the script's topics, keep replyZh a brief friendly reaction and make questionZh gently steer back to a point of the script. Add a third key "onTopic": true if what the learner just said is related to the script's topics, false if it drifted off-topic. Key order: replyZh, questionZh, onTopic. Never quote long parts of the script.`;
+    const user = JSON.stringify({ topic: topicOf(ctx), script: ctx.script, conversationSoFar: turnsJson(ctx), learnerJustSaid: transcript });
+    return [{ role: 'system', content: sys2 }, { role: 'user', content: user }];
+  }
   const user = JSON.stringify({ topic: topicOf(ctx), conversationSoFar: turnsJson(ctx), learnerJustSaid: transcript });
   return [{ role: 'system', content: system }, { role: 'user', content: user }];
 }
@@ -239,7 +257,7 @@ export async function streamReply({ llm, ctx, transcript, signal, model, timings
   const t0 = Date.now();
   if (!llm?.available) return { status: 'unavailable', reason: 'llm_not_configured', replySentences: [], questionSentences: [], attempts: 0 };
   const { ac, done } = abortable(signal, maxMs);
-  const out = { status: 'unavailable', reason: 'reply_failed', replySentences: [], questionSentences: [], attempts: 0 };
+  const out = { status: 'unavailable', reason: 'reply_failed', replySentences: [], questionSentences: [], attempts: 0, onTopic: null }; let full = '';
   const take = (key, value) => {
     if (key === 'replyZh' && !out.replySpoken) { out.replySpoken = true; const s = cleanReplySentences(value).slice(0, 2); out.replySentences = s; if (s.length) onReply(s); }
     else if (key === 'questionZh' && !out.questionSeen) { out.questionSeen = true; out.questionSentences = cleanReplySentences(value, { allowPraise: true }).slice(0, 1); }
@@ -251,16 +269,18 @@ export async function streamReply({ llm, ctx, transcript, signal, model, timings
       const scanner = new JsonUnitScanner();
       for await (const delta of llm.chatStream({ messages, signal: ac.signal, model, maxTokens: 160, temperature: 0.6, timeoutMs: maxMs })) {
         if (timings.replyFirstTokenMs === undefined) timings.replyFirstTokenMs = Date.now() - t0;
+        full += delta;
         for (const ev of scanner.push(delta)) if (ev.type === 'string') take(ev.key, ev.value);
       }
     } catch (e) { err = e; }
+    try { const j = JSON.parse(full); if (typeof j?.onTopic === 'boolean') out.onTopic = j.onTopic; } catch { /* partial / malformed: onTopic unknown */ }
     if (!err && (out.replySpoken || out.questionSeen)) { out.status = 'ok'; delete out.reason; }
     else if (!out.replySentences.length && !ac.signal.aborted) {
       // nothing usable was spoken: one non-streaming retry
       out.attempts = 2; out.reason = err ? failReason(err) : 'malformed_output';
       try {
         const raw = await llm.chatJson({ messages, signal: ac.signal, model, maxTokens: 160, temperature: 0.4, timeoutMs: Math.max(1500, maxMs - (Date.now() - t0)) });
-        if (raw && typeof raw === 'object') { take('replyZh', raw.replyZh); take('questionZh', raw.questionZh); }
+        if (raw && typeof raw === 'object') { take('replyZh', raw.replyZh); take('questionZh', raw.questionZh); if (typeof raw.onTopic === 'boolean') out.onTopic = raw.onTopic; }
         if (out.replySpoken || out.questionSeen) { out.status = 'ok'; delete out.reason; } else { out.status = 'malformed'; out.reason = 'malformed_output'; }
       } catch (e) { out.reason = failReason(e); out.status = e.code === 'llm_bad_json' ? 'malformed' : 'unavailable'; }
     } else if (err) { out.status = out.replySentences.length ? 'ok' : 'unavailable'; out.reason = failReason(err); }
@@ -270,9 +290,12 @@ export async function streamReply({ llm, ctx, transcript, signal, model, timings
 }
 
 // ---------------------------------------------------------------------------------------------------------------- opening
-export function buildOpeningMessages({ topic, scriptVocab, level }) {
+export function buildOpeningMessages({ topic, scriptVocab, level, script = '' }) {
   const system = `TALK_OPEN. You are a friendly Mandarin conversation partner. Start a free conversation with an adult learner about the topic. Reply as JSON only: {"textZh": string}.
 textZh: ONE short, friendly, open question (or a one-sentence greeting plus one question) that invites the learner to talk about the topic from their own experience; at most 30 characters; simplified Chinese only, no pinyin, no English, no markdown. ${levelNote(level)} Never mention pronunciation or tones. You may use (not required) ideas from scriptVocab.`;
+  if (script) return [{ role: 'system', content: `${system}
+SCRIPT MODE: the learner has a SCRIPT (in the user message) they are practising to talk about. Ask about its main topic or its central argument / conclusion, in a way that invites them to explain it in their own words. Do not quote the script.` },
+    { role: 'user', content: JSON.stringify({ topic, script, scriptVocab: scriptVocab.map((v) => v.text) }) }];
   return [{ role: 'system', content: system }, { role: 'user', content: JSON.stringify({ topic, scriptVocab: scriptVocab.map((v) => v.text) }) }];
 }
 export function validateOpening(parsed) {
@@ -282,14 +305,14 @@ export function validateOpening(parsed) {
   return { textZh: text, pinyin: pinyinOf(text) };
 }
 /** -> {status:'ok', textZh, pinyin, attempts} | {status:'unavailable', reason, attempts} */
-export async function generateOpening({ llm, topic, scriptVocab, level, signal, model, timings = {}, maxMs = 8000, attempts = 2 }) {
+export async function generateOpening({ llm, topic, scriptVocab, level, script = '', signal, model, timings = {}, maxMs = 8000, attempts = 2 }) {
   const t0 = Date.now();
   if (!llm?.available) return { status: 'unavailable', reason: 'llm_not_configured', attempts: 0 };
   const { ac, done } = abortable(signal, maxMs); let reason = 'opening_failed'; let n = 0;
   try {
     for (let i = 0; i < attempts; i++) {
       n = i + 1;
-      try { const raw = await llm.chatJson({ messages: buildOpeningMessages({ topic, scriptVocab, level }), signal: ac.signal, model, maxTokens: 120, temperature: 0.8, timeoutMs: Math.max(1500, maxMs - (Date.now() - t0)) }); return { status: 'ok', attempts: n, ...validateOpening(raw) }; }
+      try { const raw = await llm.chatJson({ messages: buildOpeningMessages({ topic, scriptVocab, level, script }), signal: ac.signal, model, maxTokens: 120, temperature: 0.8, timeoutMs: Math.max(1500, maxMs - (Date.now() - t0)) }); return { status: 'ok', attempts: n, ...validateOpening(raw) }; }
       catch (e) { reason = failReason(e); if (ac.signal.aborted || (e.retryable === false && e.code !== 'talk_schema')) break; }
     }
     return { status: 'unavailable', reason, attempts: n };
@@ -314,14 +337,15 @@ export function parseSummaryRequest(b) {
   if (turns.reduce((n, t) => n + cpLen(t.text), 0) > TALK_SUMMARY_MAX_CHARS_SENT) return e(`The session text is over ${TALK_SUMMARY_MAX_CHARS_SENT} characters.`, 413, 'session_too_long');
   if (!turns.some((t) => t.role === 'user')) return e('There is no learner turn to summarise.', 400, 'no_user_turns');
   const vocab = parseScriptVocab(b.scriptVocab); if (vocab.error) return { error: vocab.error };
-  return { value: { topic, level: b.level || 'normal', turns, scriptVocab: vocab.list } };
+  const sc = parseScript(b.script); if (sc.error) return { error: sc.error };
+  return { value: { topic, level: b.level || 'normal', turns, scriptVocab: vocab.list, script: sc.script } };
 }
 /** stats derived by CODE */
 export function talkStats(turns) {
   const user = turns.filter((t) => t.role === 'user');
   return { turns: turns.length, userTurns: user.length, approxCharsSpoken: user.reduce((n, t) => n + hz(t.text).length, 0) };
 }
-export function buildSummaryMessages({ topic, level, turns, scriptVocab }) {
+export function buildSummaryMessages({ topic, level, turns, scriptVocab, script = '' }) {
   let used = turns.slice(-TALK_SUMMARY_PROMPT_TURNS); let chars = used.reduce((n, t) => n + cpLen(t.text), 0);
   while (used.length > 1 && chars > TALK_SUMMARY_PROMPT_CHARS) { chars -= cpLen(used[0].text); used = used.slice(1); }
   const system = `TALK_SUMMARY. You review a finished free-talk Mandarin conversation for an English-speaking adult learner. Output JSON only:
@@ -331,8 +355,9 @@ export function buildSummaryMessages({ topic, level, turns, scriptVocab }) {
 - phrasesToTry: 3-5 natural Chinese phrases/sentences relevant to what the learner was trying to say. zh = Chinese; en = English meaning; whyEn = why it is useful (<= 100 chars).
 - strengths: 1-2 genuine strengths (English, <= 100 chars).
 You only have TEXT (speech-to-text): NEVER say anything about pronunciation, tones, pitch, accent or how it sounded. Do not invent things the learner did not say. Simplified Chinese; no pinyin.`;
-  const user = JSON.stringify({ topic: topic || 'free conversation', conversation: used, scriptVocab: scriptVocab.map((v) => v.text) });
-  return [{ role: 'system', content: system }, { role: 'user', content: user }];
+  const user = JSON.stringify({ topic: topic || 'free conversation', ...(script ? { script } : {}), conversation: used, scriptVocab: scriptVocab.map((v) => v.text) });
+  const sys = script ? `${system}\nThe learner was practising to talk about their SCRIPT (in the user message): judge how well they conveyed its topics, reasoning and conclusions; phrasesToTry should preferably be natural phrasings taken from or close to the script.` : system;
+  return [{ role: 'system', content: sys }, { role: 'user', content: user }];
 }
 const str = (x, max) => { const s = typeof x === 'string' ? x.trim() : ''; return s && cpLen(s) <= max ? s : ''; };
 const zhOnly = (s, min, max) => { const t = String(s ?? '').trim(); return t && hz(t).length >= min && cpLen(t) <= max && !LATIN.test(t) && !soundy(t) ? t : ''; };
@@ -368,4 +393,93 @@ export async function generateSummary({ llm, req, signal, model, timings = {}, m
     }
     return { status: 'unavailable', reason, attempts: n };
   } finally { done(); timings.summaryMs = Date.now() - t0; }
+}
+
+// ---------------------------------------------------------------------------------------------------------------- script-grounded UPGRADE (LLM #3, only with a script)
+// "Say it like your script": keeps the learner's meaning, uses the script's vocabulary / phrasing, modest edits. CODE checks every claim:
+//   * sourceLines must be VERBATIM substrings of the script (others dropped); offsets are code points into the script, end exclusive
+//   * every change.from must occur in `said`, every change.to in `better` (others dropped); offsets are code points into said / better, end exclusive
+//   * `better` may not add content: new hanzi (not in said ∪ sourceLines ∪ a small function-word list) above UPGRADE_MAX_NEW_RATIO => ungrounded (dropped)
+export const UPGRADE_MAX_NEW_RATIO = 0.15;   // share of better's hanzi that may be "new" (neither said, nor in the cited script lines, nor function words)
+export const UPGRADE_MAX_NEW_ABS = 1;        // ... but 1 new hanzi is always tolerated (e.g. a measure word)
+export const UPGRADE_FUNCTION_HANZI = new Set(Array.from('的了是在和也都就很还又把被给对跟与而但所以因为如果虽然然后我们你他她它这那个些一不没有着过吗呢吧啊得地要会能可以更最其中之此于则并且或者从到为让使'));
+const cpIndex = (hay, needle) => { const i = String(hay).indexOf(needle); return i < 0 ? -1 : cpLen(String(hay).slice(0, i)); };
+export function buildUpgradeMessages({ ctx, transcript }) {
+  const system = `TALK_UPGRADE. A Mandarin learner is practising to talk about their own SCRIPT. Rewrite what they just said (learnerText, from speech-to-text) so it uses the SCRIPT's vocabulary and phrasing while keeping THEIR meaning. Output JSON only:
+{"upgrade": null | {"said": string, "better": string, "changes": [{"from": string, "to": string, "kind": "word_choice"|"grammar"|"unnatural"|"english_gap", "note": string}], "sourceLines": [string]}}
+RULES:
+- "said": learnerText, or the ONE sentence of it you upgrade, copied EXACTLY. "better": that sentence rewritten with modest edits (swap words/phrases for the script's, fix clear errors). Do NOT add facts, ideas or details that the learner did not say, even if the script has them.
+- "changes": 1-5 edits; "from" copied EXACTLY from said, "to" copied EXACTLY from better. "note": optional, short English (<= 60 chars), never about pronunciation/tones.
+- "sourceLines": 1-3 short excerpts copied VERBATIM (character for character) from the script that the new wording comes from.
+- If what they said is unrelated to the script, or already uses the script's wording well, return {"upgrade": null}.
+Simplified Chinese; no pinyin; never mention pronunciation, tones or accent.`;
+  return [{ role: 'system', content: system }, { role: 'user', content: JSON.stringify({ script: ctx.script, learnerText: transcript }) }];
+}
+/** -> { upgrade|null, status:'ok'|'none'|'ungrounded', dropped:[reason], newRatio? }; throws TalkSchemaError for a malformed shape */
+export function validateUpgrade(parsed, { transcript, script }) {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !('upgrade' in parsed)) throw new TalkSchemaError('upgrade key missing');
+  const u = parsed.upgrade; const dropped = [];
+  if (u === null) return { upgrade: null, status: 'none', dropped };
+  if (!u || typeof u !== 'object' || Array.isArray(u) || typeof u.better !== 'string' || !Array.isArray(u.changes)) throw new TalkSchemaError('upgrade shape');
+  const t = String(transcript ?? '').trim();
+  let said = typeof u.said === 'string' ? u.said.trim() : '';
+  if (!said || !t.includes(said)) { if (said) dropped.push('said_not_in_transcript'); said = t; }
+  const better = u.better.trim();
+  if (hz(better).length < 2 || LATIN.test(better) || soundy(better) || /[#*_`<>{}[\]]/.test(better) || cpLen(better) > Math.max(cpLen(said) * 2, cpLen(said) + 40)) return { upgrade: null, status: 'none', dropped: [...dropped, 'bad_better'] };
+  if (hanziOnly(better) === hanziOnly(said)) return { upgrade: null, status: 'none', dropped: [...dropped, 'no_change'] };
+  const sourceLines = [];
+  for (const x of Array.isArray(u.sourceLines) ? u.sourceLines : []) {
+    const text = (typeof x === 'string' ? x : typeof x?.text === 'string' ? x.text : '').trim();
+    if (!text || hz(text).length < 2 || cpLen(text) > 160 || !script.includes(text)) { dropped.push('sourceLine_not_in_script'); continue; }
+    if (sourceLines.some((s) => s.text === text) || sourceLines.length >= 3) continue;
+    const start = cpIndex(script, text); sourceLines.push({ text, start, end: start + cpLen(text) });
+  }
+  const changes = [];
+  for (const c of u.changes) {
+    const from = typeof c?.from === 'string' ? c.from.trim() : ''; const to = typeof c?.to === 'string' ? c.to.trim() : '';
+    if (!from || !to || from === to) { dropped.push('change_empty'); continue; }
+    if (!said.includes(from)) { dropped.push('change_from_not_in_said'); continue; }
+    if (!better.includes(to)) { dropped.push('change_to_not_in_better'); continue; }
+    if (LATIN.test(to) || soundy(to) || hz(to).length < 1) { dropped.push('change_to_unusable'); continue; }
+    if (changes.length >= 5) break;
+    const fromStart = cpIndex(said, from); const toStart = cpIndex(better, to);
+    const ch = { from, to, fromStart, fromEnd: fromStart + cpLen(from), toStart, toEnd: toStart + cpLen(to) };
+    if (CORRECTION_KINDS.includes(c.kind)) ch.kind = c.kind;
+    const note = typeof c.note === 'string' ? c.note.trim() : '';
+    if (note && cpLen(note) <= 80 && !soundy(note) && !LANG_PRAISE.test(note)) ch.note = note;
+    changes.push(ch);
+  }
+  if (!changes.length) return { upgrade: null, status: 'none', dropped: [...dropped, 'no_valid_changes'] };
+  // grounding: better may not add content that is neither in what he said nor in the cited script lines
+  const allowed = new Set([...hz(simp(said)), ...sourceLines.flatMap((l) => hz(simp(l.text))), ...UPGRADE_FUNCTION_HANZI]);
+  const bh = hz(simp(better)); const fresh = bh.filter((h) => !allowed.has(h)); const newRatio = bh.length ? fresh.length / bh.length : 1;
+  if (fresh.length > UPGRADE_MAX_NEW_ABS && newRatio > UPGRADE_MAX_NEW_RATIO) return { upgrade: null, status: 'ungrounded', dropped: [...dropped, 'ungrounded'], newRatio };
+  return { upgrade: { said, better, betterPinyin: pinyinOf(better), changes, sourceLines }, status: 'ok', dropped, newRatio };
+}
+/** saveable phrases from the changes' `to` (compatible with POST /api/words: text <= 100, pinyin <= 200, sourceChunk <= 200) */
+export function upgradeSaveable(upgrade) {
+  if (!upgrade) return [];
+  const out = []; const src = upgrade.sourceLines[0]?.text || upgrade.better;
+  for (const c of upgrade.changes) {
+    const text = c.to.replace(/^[\s\p{P}]+|[\s\p{P}]+$/gu, '');
+    if (hz(text).length < 1 || cpLen(text) > 20 || out.some((x) => x.text === text)) continue;
+    out.push({ text, pinyin: pinyinOf(text), meaning: null, sourceChunk: cpSlice(src, 200) });
+  }
+  return out;
+}
+/** -> {status:'ok'|'none'|'ungrounded', upgrade, dropped, attempts} | {status:'unavailable', reason, attempts} */
+export async function generateUpgrade({ llm, ctx, transcript, signal, model, timings = {}, maxMs = 8000, attempts = 2 }) {
+  const t0 = Date.now();
+  if (!llm?.available) return { status: 'unavailable', reason: 'llm_not_configured', attempts: 0 };
+  const { ac, done } = abortable(signal, maxMs); let reason = 'upgrade_failed'; let n = 0;
+  try {
+    for (let i = 0; i < attempts; i++) {
+      n = i + 1;
+      try {
+        const raw = await llm.chatJson({ messages: buildUpgradeMessages({ ctx, transcript }), signal: ac.signal, model, maxTokens: 450, temperature: 0, timeoutMs: Math.max(1500, maxMs - (Date.now() - t0)) });
+        return { attempts: n, ...validateUpgrade(raw, { transcript, script: ctx.script }) };
+      } catch (e) { reason = failReason(e); if (ac.signal.aborted || (e.retryable === false && e.code !== 'talk_schema')) break; }
+    }
+    return { status: 'unavailable', reason, attempts: n };
+  } finally { done(); timings.upgradeMs = Date.now() - t0; }
 }

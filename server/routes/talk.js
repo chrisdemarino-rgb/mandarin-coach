@@ -6,7 +6,7 @@ import { deriveFacts } from '../engines/assessment/index.js';
 import { emptyWordFacts } from '../engines/assessment/words.js';
 import { hanzi } from '../services/coach.js';
 import { toSimplified, toneCorrection, hz } from '../services/retell.js';
-import { parseTalkContext, parseScriptVocab, parseSummaryRequest, talkStats, talkGate, streamReply, findCorrection, generateOpening, generateSummary, pinyinOf,
+import { parseTalkContext, parseScriptVocab, parseSummaryRequest, talkStats, talkGate, streamReply, findCorrection, generateOpening, generateSummary, pinyinOf, parseScript, generateUpgrade, upgradeSaveable,
   TALK_GATE_ZH, TALK_FALLBACK_ZH, TALK_THEN_ZH, TALK_NATURAL_ZH, TALK_MODEL_PREFIX_ZH, TALK_MAX_TOPIC } from '../services/talk.js';
 import { rateLimit } from '../lib/ratelimit.js';
 
@@ -16,7 +16,7 @@ const race = (p, ms) => { let h; return Promise.race([p, new Promise((res) => { 
 
 export function talkRoutes(r, { cfg, engine, services, db, bad, stamp, stream, speaker, warmTts, meaningOf, ID_RE }) {
   const P = cfg.policy; const model = cfg.openai.talkModel;
-  const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_AUDIO, files: 1, fields: 8, fieldSize: 32 * 1024, parts: 12 } }).single('audio');
+  const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_AUDIO, files: 1, fields: 8, fieldSize: 64 * 1024, parts: 12 } }).single('audio');
   const receive = (req, res, next) => upload(req, res, (e) => {
     if (!e) return next();
     if (e.code === 'LIMIT_FILE_SIZE') return bad(res, 413, 'upload_too_large', 'Recording is over 10 MB. Record a shorter turn.');
@@ -30,11 +30,12 @@ export function talkRoutes(r, { cfg, engine, services, db, bad, stamp, stream, s
     if (typeof b.topic !== 'string' || !b.topic.trim() || cpLen(b.topic.trim()) > TALK_MAX_TOPIC) return bad(res, 400, 'invalid_topic', `topic must be a non-empty string of at most ${TALK_MAX_TOPIC} characters.`);
     if (b.level != null && !['easy', 'normal'].includes(b.level)) return bad(res, 400, 'invalid_level', 'level must be "easy" or "normal".');
     const vocab = parseScriptVocab(b.scriptVocab); if (vocab.error) return bad(res, vocab.error.status, vocab.error.code, vocab.error.message);
+    const sc = parseScript(b.script); if (sc.error) return bad(res, sc.error.status, sc.error.code, sc.error.message);
     if (!services.llm?.available) return bad(res, 503, 'llm_not_configured', 'OPENAI_API_KEY is not set on the server, so the opening cannot be generated.');
     const timings = {};
-    const gen = await generateOpening({ llm: services.llm, topic: b.topic.trim(), scriptVocab: vocab.list, level: b.level || 'normal', model, timings, maxMs: P.TALK_OPENING_MAX_MS });
+    const gen = await generateOpening({ llm: services.llm, topic: b.topic.trim(), scriptVocab: vocab.list, level: b.level || 'normal', script: sc.script, model, timings, maxMs: P.TALK_OPENING_MAX_MS });
     if (gen.status !== 'ok') return bad(res, gen.reason === 'llm_not_configured' ? 503 : 502, 'opening_generation_failed', `Could not produce an opening (${gen.reason}). Try again.`);
-    const out = { ok: true, textZh: gen.textZh, pinyin: gen.pinyin };
+    const out = { ok: true, textZh: gen.textZh, pinyin: gen.pinyin, scriptUsed: !!sc.script };
     let audioMs = null;
     if (req.query.audio === '1' && services.tts.available) {
       const a0 = Date.now();
@@ -93,7 +94,7 @@ export function talkRoutes(r, { cfg, engine, services, db, bad, stamp, stream, s
       sp.unit({ kind: 'gate', text: TALK_GATE_ZH });
       await sp.done(); if (S.closed) return;
       S.markOk();
-      return send('done', finish({ gate, correction: null, correctionStatus: 'skipped', suggestedWords: [], vocabHints: [], replyZh: null, questionZh: null, summary: { coached: false, llmCalled: false, tone: 'skipped' } }));
+      return send('done', finish({ gate, correction: null, correctionStatus: 'skipped', suggestedWords: [], vocabHints: [], replyZh: null, questionZh: null, replyPinyin: null, questionPinyin: null, onTopic: null, upgrade: null, upgradeStatus: ctx.script ? 'skipped' : 'no_script', saveable: [], summary: { coached: false, llmCalled: false, tone: 'skipped' } }));
     }
 
     send('status', { stage: 'coaching' });
@@ -108,6 +109,9 @@ export function talkRoutes(r, { cfg, engine, services, db, bad, stamp, stream, s
     // two parallel LLM calls: the streamed conversational reply (spoken as soon as it arrives) and the correction finder (arrives while the reply is spoken)
     const findStart = Date.now();
     const findP = findCorrection({ llm: services.llm, ctx, transcript, signal: S.ac.signal, model, timings, maxMs: P.TALK_FIND_MAX_MS });
+    // 3rd parallel call (only with a script): the script-grounded upgrade; never spoken, awaited (bounded) just before done
+    const upStart = Date.now();
+    const upP = ctx.script ? generateUpgrade({ llm: services.llm, ctx, transcript, signal: S.ac.signal, model, timings, maxMs: P.TALK_UPGRADE_MAX_MS }).catch(() => ({ status: 'unavailable', reason: 'upgrade_failed', attempts: 0 })) : null;
     const reply = await streamReply({ llm: services.llm, ctx, transcript, signal: S.ac.signal, model, timings, maxMs: P.TALK_REPLY_MAX_MS, onReply: (sentences) => { if (!S.closed) sp.unit({ kind: 'reply', text: sentences.join('') }); } });
     if (S.closed) return;
     if (reply.status === 'unavailable') return S.terminal(reply.reason === 'llm_not_configured' ? 'llm_not_configured' : 'talk_llm_unavailable', `The coach could not reply right now (${reply.reason}). No reply was made up.`, reply.reason !== 'llm_not_configured', 'coaching');
@@ -163,9 +167,19 @@ export function talkRoutes(r, { cfg, engine, services, db, bad, stamp, stream, s
     }
     for (const h of vocabHints) add({ text: h.text, pinyin: h.pinyin, meaning: meaningOf(h.text), reason: 'script_vocab' });
     const { _tone, ...pub } = correction || {};
+    let up = null; let upgradeStatus = 'no_script';
+    if (upP) {
+      up = await race(upP, P.TALK_UPGRADE_MAX_MS + 300 - (Date.now() - upStart)); if (S.closed) return;
+      upgradeStatus = up === 'timeout' ? 'unavailable' : up.status;
+      if (up === 'timeout') up = { status: 'unavailable', reason: 'timeout', attempts: 0 };
+    }
+    const upgrade = up?.status === 'ok' ? up.upgrade : null;
+    const replyZh = reply.replySentences.join('') || null; const questionZh = questionText && !degraded ? questionText : null;
     S.markOk();
     send('done', finish({ correction: correction ? pub : null, correctionStatus, ...(late ? { correctionLate: true } : {}), suggestedWords, vocabHints,
-      replyZh: reply.replySentences.join('') || null, questionZh: questionText && !degraded ? questionText : null, ...(degraded ? { degraded } : {}),
-      summary: { coached: true, llmCalled: true, replyAttempts: reply.attempts, findAttempts: find?.attempts ?? 0, droppedClaims: (find?.dropped || []).length, tone: tone.status, ...(tone.status === 'ok' ? { engine: S.label?.engine, mock: S.label?.mock } : {}), ...(tone.reason ? { toneReason: tone.reason } : {}) } }));
+      replyZh, questionZh, replyPinyin: replyZh ? pinyinOf(replyZh) : null, questionPinyin: questionZh ? pinyinOf(questionZh) : null,
+      onTopic: ctx.script ? (typeof reply.onTopic === 'boolean' ? reply.onTopic : null) : null,
+      upgrade, upgradeStatus, saveable: upgradeSaveable(upgrade), ...(degraded ? { degraded } : {}),
+      summary: { coached: true, llmCalled: true, replyAttempts: reply.attempts, findAttempts: find?.attempts ?? 0, droppedClaims: (find?.dropped || []).length, ...(up ? { upgradeAttempts: up.attempts ?? 0, upgradeDropped: (up.dropped || []).length, ...(up.reason ? { upgradeReason: up.reason } : {}) } : {}), tone: tone.status, ...(tone.status === 'ok' ? { engine: S.label?.engine, mock: S.label?.mock } : {}), ...(tone.reason ? { toneReason: tone.reason } : {}) } }));
   }
 }

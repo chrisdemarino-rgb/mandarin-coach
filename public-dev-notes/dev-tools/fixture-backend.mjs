@@ -10,7 +10,7 @@ import http from "node:http";
 
 const LISTEN = Number(process.argv[2] || 8095), TARGET = Number(process.argv[3] || 8093);
 const NEEDED = 3;
-const mode = { attempt: "issues", drill: "correct", unsupported: false, retell: "", qa: "missing", qaHints: "backend", qaAnswer: "assessment", qaUnsupported: false, qaTranscript: "", talk: "ok", talkUnsupported: false, talkOpening: "ok", talkSummary: "ok", talkTranscript: "", talkSlow: 0 };   // retell: "" | "tone_flagged" | "tone_unflagged" | "legacy" (only touches basis:"transcript" assessments)
+const mode = { attempt: "issues", drill: "correct", unsupported: false, retell: "", qa: "missing", qaHints: "backend", qaAnswer: "assessment", qaUnsupported: false, qaTranscript: "", talk: "ok", talkUnsupported: false, talkOpening: "ok", talkSummary: "ok", talkTranscript: "", talkSlow: 0, talkUpgrade: "", talkPinyin: false, talkUpStatus: "", talkOffTopic: false };   // retell: "" | "tone_flagged" | "tone_unflagged" | "legacy" (only touches basis:"transcript" assessments)
 let words = [];  // {id,text,pinyin,meaning,missCount,correctStreak,needed,lastMissedAt,sourceChunk,status}
 let seq = 0, attemptNo = 0, drillNo = 0, talkNo = 0;
 const last = { qaChunkText: null, qaFields: [], attemptChunkText: null, talkContext: null, talkFields: [], talkAttemptIds: [], talkTurnCalls: 0, talkOpeningBody: null, talkSummaryBody: null, talkSummaryCalls: 0 };   // what the frontend sent (GET /__fixture/last)
@@ -167,7 +167,24 @@ async function talkRoute(req, res, p) {
       suggestedWords = [{ text: "逛公园", pinyin: "guàng gōng yuán", meaning: "to stroll around a park", reason: "word_choice" }];
     }
     await w("coach_text", { delta: question, index: idx, role: "question" }); await w("coach_audio", { url: "/__fixture/talk.wav", index: idx, text: question });
-    await w("done", { correction, correctionStatus: correction ? "ok" : "none", suggestedWords, vocabHints: [], replyZh: reply, questionZh: question, timings: {}, summary: { coached: true, tone: "skipped" } });
+    let upgrade = null;
+    if (mode.talkUpgrade) {   // proposed shape: {said, better, betterPinyin?, changes:[{from,to,fromStart?,...}], sourceLines}
+      const said = text, pairs = [["玩了", "逛了逛"], ["很好", "特别好"]].filter(([f]) => said.includes(f));
+      let better = said; for (const [f, t] of pairs) better = better.replace(f, t);
+      const cpi = (hay, nd) => { const i = hay.indexOf(nd); return i < 0 ? -1 : [...hay.slice(0, i)].length; };
+      const changes = pairs.map(([from, to]) => mode.talkUpgrade === "offsets"
+        ? { from, to, fromStart: cpi(said, from), fromEnd: cpi(said, from) + [...from].length, toStart: cpi(better, to), toEnd: cpi(better, to) + [...to].length, kind: "word_choice", note: "more natural here" }
+        : mode.talkUpgrade === "badoffsets" ? { from, to, fromStart: 99, fromEnd: 120, toStart: 0, toEnd: 1 } : { from, to });
+      upgrade = mode.talkUpgrade === "garbage" ? { said: 5, better: null } : { said, better, betterPinyin: mode.talkUpgrade === "nopinyin" ? undefined : "wǒ zhōu mò qù gōng yuán guàng le guàng， tiān qì tè bié hǎo。", changes,
+        sourceLines: mode.talkUpgrade === "strings" ? ["周末的时候，我常常约几个中国朋友一起吃饭。"] : [{ text: "周末的时候，我常常约几个中国朋友一起吃饭。", start: 0, end: 21 }] };
+    }
+    // backend 72c25bd fields: upgradeStatus, onTopic, saveable (talkUpStatus forces a non-ok status, e.g. "ungrounded"; talkOffTopic -> onTopic:false)
+    const upgradeStatus = mode.talkUpStatus || (upgrade ? "ok" : mode.talkUpgrade === "" ? "none" : "ok");
+    if (mode.talkUpStatus) upgrade = null;
+    const saveable = upgrade && upgrade.changes ? upgrade.changes.map((c) => ({ text: c.to, pinyin: c.to === "逛了逛" ? "guàng le guàng" : "tè bié hǎo", meaning: null, sourceChunk: upgrade.sourceLines && upgrade.sourceLines[0] ? (upgrade.sourceLines[0].text || upgrade.sourceLines[0]) : upgrade.better })) : [];
+    const topicx = mode.talkUpgrade || mode.talkUpStatus ? { onTopic: mode.talkOffTopic ? false : true } : { onTopic: null };
+    const pyx = mode.talkPinyin ? { replyPinyin: "tīng qǐ lái hěn bú cuò！", questionPinyin: "nǐ zài gōng yuán lǐ zuò le shén me？" } : {};
+    await w("done", { correction, correctionStatus: correction ? "ok" : "none", suggestedWords, vocabHints: [], replyZh: reply, questionZh: question, ...pyx, upgrade, upgradeStatus, saveable, ...topicx, timings: {}, summary: { coached: true, tone: "skipped" } });
     seen.set("talk:" + attemptId, out); return res.end();
   }
   return notFound(res);
@@ -180,8 +197,8 @@ const server = http.createServer(async (req, res) => {
     if (p === "/__fixture/last") return json(res, 200, last);
     if (p === "/__fixture/mode" && req.method === "POST") {
       const b = JSON.parse((await readBody(req)).toString() || "{}");
-      if (b.reset) { words = []; seq = 0; attemptNo = 0; drillNo = 0; seen.clear(); talkNo = 0; Object.assign(last, { talkContext: null, talkFields: [], talkAttemptIds: [], talkTurnCalls: 0, talkOpeningBody: null, talkSummaryBody: null, talkSummaryCalls: 0 }); }
-      for (const k of ["attempt", "drill", "unsupported", "retell", "qa", "qaHints", "qaAnswer", "qaUnsupported", "qaTranscript", "talk", "talkUnsupported", "talkOpening", "talkSummary", "talkTranscript", "talkSlow"]) if (b[k] !== undefined) mode[k] = b[k];
+      if (b.reset) { words = []; mode.talkUpgrade = ""; mode.talkPinyin = false; mode.talkUpStatus = ""; mode.talkOffTopic = false; seq = 0; attemptNo = 0; drillNo = 0; seen.clear(); talkNo = 0; Object.assign(last, { talkContext: null, talkFields: [], talkAttemptIds: [], talkTurnCalls: 0, talkOpeningBody: null, talkSummaryBody: null, talkSummaryCalls: 0 }); }
+      for (const k of ["attempt", "drill", "unsupported", "retell", "qa", "qaHints", "qaAnswer", "qaUnsupported", "qaTranscript", "talk", "talkUpgrade", "talkPinyin", "talkUpStatus", "talkOffTopic", "talkUnsupported", "talkOpening", "talkSummary", "talkTranscript", "talkSlow"]) if (b[k] !== undefined) mode[k] = b[k];
       if (Array.isArray(b.seed)) for (const t of b.seed) { const w = addMissed(t, `例句：${t}很重要。`); w.missCount = 2; }
       return json(res, 200, { mode, words: words.length });
     }

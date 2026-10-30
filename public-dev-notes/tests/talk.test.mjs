@@ -85,8 +85,9 @@ t("normalizeSummary: empty/garbage/provisional shapes never throw", () => {
   assert.equal(normalizeSummary({ takeaways: Array.from({ length: 30 }, (_, i) => `t${i}`) }).takeaways.length, 8);
 });
 t("normalizeOpening", () => {
-  assert.deepEqual(normalizeOpening({ ok: true, textZh: "你好吗？", pinyin: "nǐ hǎo ma?", textAudio: { url: "/api/audio/x.mp3" } }), { textZh: "你好吗？", pinyin: "nǐ hǎo ma?", audioUrl: "/api/audio/x.mp3" });
-  assert.deepEqual(normalizeOpening(null), { textZh: "", pinyin: "", audioUrl: "" });
+  assert.deepEqual(normalizeOpening({ ok: true, textZh: "你好吗？", pinyin: "nǐ hǎo ma?", textAudio: { url: "/api/audio/x.mp3" } }), { textZh: "你好吗？", pinyin: "nǐ hǎo ma?", audioUrl: "/api/audio/x.mp3", scriptUsed: false });
+  assert.equal(normalizeOpening({ textZh: "a", scriptUsed: true }).scriptUsed, true);
+  assert.deepEqual(normalizeOpening(null), { textZh: "", pinyin: "", audioUrl: "", scriptUsed: false });
 });
 t("scriptVocabOf: 2-4 hanzi words, most frequent first, injectable segmenter, no segmenter -> []", () => {
   const fake = { segment: (txt) => txt.split(/(?<=[，。 ])/).flatMap((p) => p.match(/[\u4e00-\u9fff]{1,6}|[^\u4e00-\u9fff]+/g) || []).map((segment) => ({ segment, isWordLike: /[\u4e00-\u9fff]/.test(segment) })) };

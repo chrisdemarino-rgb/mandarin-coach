@@ -14,6 +14,7 @@
 //  * 404 / 501 = "Free talk isn't available yet" (isUnsupported).
 import { req, jsonOf, readSse, extFor, noteMock, ApiError } from "./api.js";
 import { stripDirections } from "../shared/script.js";
+import { SCRIPT_MAX } from "./limits.js";
 
 export const isUnsupported = (e) => !!e && (e.status === 404 || e.status === 501);
 const str = (v) => (typeof v === "string" ? v.trim() : "");
@@ -82,10 +83,40 @@ export function readEvent(name, data) {
   if (name === "done") return {
     kind: "done", transcript: str(d.transcript), coachText: str(d.coachText || d.reply || d.coach), coachPinyin: str(d.coachPinyin || d.pinyin), acoustic: normalizeAcoustic(d.acoustic),
     gate: str(d.gate), correction: normalizeCorrection(d.correction), suggested: normalizeSuggested(d.suggestedWords), replyZh: str(d.replyZh), questionZh: str(d.questionZh),
-    replyPinyin: str(d.replyPinyin), questionPinyin: str(d.questionPinyin), degraded: str(d.degraded), raw: d,
+    replyPinyin: str(d.replyPinyin), questionPinyin: str(d.questionPinyin), ...upgradeOf(d), degraded: str(d.degraded), raw: d,
   };
   return { kind: "ignore" };
 }
+/** done.upgradeStatus/upgrade/onTopic/saveable -> {upgradeStatus, upgrade (only when status 'ok'), onTopic:true|false|null, saveable:[{text,pinyin,meaning,sourceChunk}]}. */
+const UP_STATUS = new Set(["ok", "none", "ungrounded", "unavailable", "no_script", "skipped"]);
+export function upgradeOf(d) {
+  const o = d && typeof d === "object" ? d : {};
+  const raw = str(o.upgradeStatus).toLowerCase();
+  const status = UP_STATUS.has(raw) ? raw : raw ? "none" : (o.upgrade ? "ok" : "none");
+  const upgrade = status === "ok" ? normalizeUpgrade(o.upgrade) : null;
+  return { upgradeStatus: upgrade ? "ok" : status === "ok" ? "none" : status, upgrade, onTopic: o.onTopic === true ? true : o.onTopic === false ? false : null, saveable: normalizeSaveable(o.saveable) };
+}
+/** done.saveable -> [{text, pinyin, meaning, sourceChunk}] ready for POST /api/words (deduped, max 8). */
+export function normalizeSaveable(arr) {
+  const seen = new Set();
+  return (Array.isArray(arr) ? arr : []).map((w) => (w && typeof w === "object" ? { text: str(w.text), pinyin: str(w.pinyin), meaning: str(w.meaning), sourceChunk: clip(str(w.sourceChunk), 200) } : null))
+    .filter((w) => w && w.text && cps(w.text).length <= 20 && !seen.has(w.text) && seen.add(w.text)).slice(0, 8);
+}
+/** Short soft note under a coach reply (or "" for none). Never claims anything about sound. */
+export function upgradeNoteOf(status, onTopic) {
+  const n = [];
+  if (onTopic === false) n.push("That was a bit off your script's topic. Try bringing it back to what your script is about.");
+  if (status === "ungrounded") n.push("No script-based rewrite this time: the suggestion strayed from your script, so it was left out.");
+  else if (status === "unavailable") n.push("The \u201Ccould have said\u201D comparison isn't available for this turn.");
+  else if (status === "no_script") n.push("Add a script on the Script tab to see how your script would say it.");
+  return n.join(" ");
+}
+/** The script text sent as context.script: stage directions stripped (the spoken text), NFC, trimmed. "" when empty or over SCRIPT_MAX (then it is not sent). */
+export function scriptForTalk(text) {
+  const s = stripDirections(String(text || "")).normalize("NFC").replace(/[ \t]+\n/g, "\n").trim();
+  return s && cps(s).length <= SCRIPT_MAX ? s : "";
+}
+export const scriptTooLongForTalk = (text) => { const s = stripDirections(String(text || "")).normalize("NFC").trim(); return cps(s).length > SCRIPT_MAX; };
 /** done.correction -> {kind, quote, betterZh, explainZh, pinyin} | null. A WORDING suggestion from the transcript text; never about sound. */
 export function normalizeCorrection(c) {
   if (!c || typeof c !== "object" || Array.isArray(c)) return null;
@@ -130,8 +161,10 @@ const ERROR_HINTS = {
   transcription_failed: "I couldn't write down what you said. Try again, or skip that turn.",
   upload_too_large: "That recording is too big. Say a sentence or two, then tap Done.",
   context_too_large: "The conversation got too long to send. Finish to get your summary.",
+  script_too_long: "Your script is over 3,000 characters. Shorten it on the Script tab, then try again.",
+  invalid_context: "The app sent something the coach couldn't read. Reload the page and try again.",
 };
-const RERECORD = new Set(["no_speech_detected", "no_speech", "gated", "audio_too_long", "talk_turn_too_long", "upload_too_large", "empty"]);
+const RERECORD = new Set(["script_too_long", "invalid_context", "no_speech_detected", "no_speech", "gated", "audio_too_long", "talk_turn_too_long", "upload_too_large", "empty"]);
 /** Terminal error -> {message, retryable, code, action:'reupload'|'rerecord', canSkip}. Message always starts with "No assessment obtained" (once), like the other modes. */
 export function talkErrorOf(e) {
   const code = (e && e.code) || "", raw = ((e && e.message) || "").replace(/^no assessment obtained:?\s*/i, "");
@@ -156,7 +189,7 @@ export function scriptVocabOf(scriptText, segmenter = defaultSegmenter()) {
 /** -> {textZh, pinyin, audioUrl} (textZh may be "" when the body is unusable). */
 export function normalizeOpening(raw) {
   const o = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
-  return { textZh: str(o.textZh || o.text), pinyin: str(o.pinyin), audioUrl: str(o.textAudio && o.textAudio.url || o.audioUrl) };
+  return { textZh: str(o.textZh || o.text), pinyin: str(o.pinyin), audioUrl: str(o.textAudio && o.textAudio.url || o.audioUrl), scriptUsed: o.scriptUsed === true };
 }
 
 /* ---------------- summary ---------------- */
@@ -173,14 +206,15 @@ export function normalizeSummary(raw) {
 }
 
 /* ---------------- network ---------------- */
-const ctxOf = ({ topic, history, scriptVocab }) => ({ topic: cleanTopic(topic), turns: Array.isArray(history) ? history : [], ...(Array.isArray(scriptVocab) && scriptVocab.length ? { scriptVocab } : {}) });
+const scr = (script) => (typeof script === "string" && script ? { script } : {});
+const ctxOf = ({ topic, history, scriptVocab, script }) => ({ topic: cleanTopic(topic), turns: Array.isArray(history) ? history : [], ...(Array.isArray(scriptVocab) && scriptVocab.length ? { scriptVocab } : {}), ...scr(script) });
 export const talk = {
   /** Same contract as api.attempt(): resolves {replayed}; rejects ApiError (isUnsupported for 404/501). Re-call with the SAME attemptId to retry the same take. */
-  async turn({ blob, mime, topic, history, scriptVocab, attemptId, voice, speed, signal, onEvent }) {
+  async turn({ blob, mime, topic, history, scriptVocab, script, attemptId, voice, speed, signal, onEvent }) {
     const fd = new FormData();
     fd.append("audio", blob, `take.${extFor(mime || blob.type || "")}`);
     fd.append("attemptId", attemptId);
-    fd.append("context", JSON.stringify(ctxOf({ topic, history, scriptVocab })));
+    fd.append("context", JSON.stringify(ctxOf({ topic, history, scriptVocab, script })));
     if (voice) fd.append("voice", voice);
     if (speed) fd.append("speed", String(speed));
     const res = await req("POST", "/api/talk/turn", { body: fd, signal });
@@ -191,14 +225,70 @@ export const talk = {
     return { replayed: res.headers.get("X-Attempt-Replayed") === "true" };
   },
   /** The coach's opening question (+ audio url). -> normalizeOpening(). Throws ApiError. */
-  async opening({ topic, scriptVocab, voice, speed, signal }) {
+  async opening({ topic, scriptVocab, script, voice, speed, signal }) {
     const q = new URLSearchParams({ audio: "1", ...(voice ? { voice } : {}), ...(speed ? { speed: String(speed) } : {}) });
-    const body = await req("POST", `/api/talk/opening?${q}`, { json: { topic: cleanTopic(topic), ...(Array.isArray(scriptVocab) && scriptVocab.length ? { scriptVocab } : {}) }, signal }).then(jsonOf);
+    const body = await req("POST", `/api/talk/opening?${q}`, { json: { topic: cleanTopic(topic), ...(Array.isArray(scriptVocab) && scriptVocab.length ? { scriptVocab } : {}), ...scr(script) }, signal }).then(jsonOf);
     return normalizeOpening(body);
   },
   /** -> normalised summary. Throws ApiError. */
-  async summary({ topic, turns, scriptVocab, signal }) {
-    const body = await req("POST", "/api/talk/summary", { json: { topic: cleanTopic(topic), turns: summaryTurns(turns), ...(Array.isArray(scriptVocab) && scriptVocab.length ? { scriptVocab } : {}) }, signal }).then(jsonOf);
+  async summary({ topic, turns, scriptVocab, script, signal }) {
+    const body = await req("POST", "/api/talk/summary", { json: { topic: cleanTopic(topic), turns: summaryTurns(turns), ...(Array.isArray(scriptVocab) && scriptVocab.length ? { scriptVocab } : {}), ...scr(script) }, signal }).then(jsonOf);
     return normalizeSummary(body);
   },
 };
+
+/* ------------------------------------------------------------ per-turn upgrade ("What you said / Could have said") */
+// done.upgrade: null | {said, better, betterPinyin?, changes:[{from,to,fromStart?,fromEnd?,toStart?,toEnd?,kind?,note?}], sourceLines:[{text,start?,end?}] (offsets into the SCRIPT) | [string]}, upgradeStatus, onTopic, saveable (backend 72c25bd)
+// Offsets are code points into said / better, end exclusive. Bad or missing offsets -> substring search (left to right, after the previous change).
+const isIdx = (n) => Number.isInteger(n) && n >= 0;
+/** Find `needle` in `hay` (code points) at or after `from`; -1 if absent. */
+export function cpIndexOf(hay, needle, from = 0) {
+  const h = cps(hay), n = cps(needle); if (!n.length) return -1;
+  for (let i = Math.max(0, from); i + n.length <= h.length; i++) { let ok = true; for (let k = 0; k < n.length; k++) if (h[i + k] !== n[k]) { ok = false; break; } if (ok) return i; }
+  return -1;
+}
+/** Resolve one side of a change: valid given offsets win (and must match `frag` when frag is given), else search after `after`. -> [start,end] | null */
+export function resolveSpan(text, frag, start, end, after = 0) {
+  const t = cps(text), f = str(frag);
+  if (isIdx(start) && isIdx(end) && start < end && end <= t.length && (!f || t.slice(start, end).join("") === f)) return [start, end];
+  if (!f) return null;
+  let i = cpIndexOf(text, f, after); if (i < 0) i = cpIndexOf(text, f, 0);
+  return i < 0 ? null : [i, i + cps(f).length];
+}
+/** Spans -> render segments [{text, mark, i}] (sorted, overlaps dropped). `i` = change index for marked segments. */
+export function segmentsOf(text, spans) {
+  const t = cps(text), list = (spans || []).map((s, i) => s && { s: s[0], e: s[1], i }).filter(Boolean).sort((a, b) => a.s - b.s);
+  const out = []; let pos = 0;
+  for (const sp of list) {
+    if (sp.s < pos || sp.e > t.length) continue;
+    if (sp.s > pos) out.push({ text: t.slice(pos, sp.s).join(""), mark: false });
+    out.push({ text: t.slice(sp.s, sp.e).join(""), mark: true, i: sp.i }); pos = sp.e;
+  }
+  if (pos < t.length) out.push({ text: t.slice(pos).join(""), mark: false });
+  return out;
+}
+/** done.upgrade -> null | {said, better, betterPinyin, changes:[{from,to,kind,note,fromSpan,toSpan}], saidSegs, betterSegs, sourceLines:[{text,start,end}]}. Never throws. */
+export function normalizeUpgrade(u) {
+  if (!u || typeof u !== "object") return null;
+  const said = str(u.said), better = str(u.better);
+  if (!said || !better || said === better) return null;
+  const changes = []; let fa = 0, ta = 0;
+  for (const c of Array.isArray(u.changes) ? u.changes.slice(0, 8) : []) {
+    if (!c || typeof c !== "object") continue;
+    const from = str(c.from), to = str(c.to); if (!from && !to) continue;
+    const fromSpan = resolveSpan(said, from, c.fromStart, c.fromEnd, fa), toSpan = resolveSpan(better, to, c.toStart, c.toEnd, ta);
+    if (fromSpan) fa = fromSpan[1]; if (toSpan) ta = toSpan[1];
+    changes.push({ from: fromSpan ? cps(said).slice(...fromSpan).join("") : from, to: toSpan ? cps(better).slice(...toSpan).join("") : to, kind: str(c.kind), note: str(c.note), fromSpan, toSpan });
+  }
+  const sourceLines = (Array.isArray(u.sourceLines) ? u.sourceLines : []).map((l) => (typeof l === "string" ? { text: l.trim(), start: null, end: null } : l && typeof l === "object" ? { text: str(l.text), start: Number.isInteger(l.start) ? l.start : null, end: Number.isInteger(l.end) ? l.end : null } : null)).filter((l) => l && l.text).slice(0, 4);
+  return { said, better, betterPinyin: str(u.betterPinyin), changes, sourceLines,
+    saidSegs: segmentsOf(said, changes.map((c) => c.fromSpan)), betterSegs: segmentsOf(better, changes.map((c) => c.toSpan)) };
+}
+/** What "Save phrase" saves: done.saveable when the backend sent it (posted as-is to /api/words); else each changed 'to' phrase, or the whole better sentence. */
+export function phrasesToSave(up, saveable) {
+  if (Array.isArray(saveable) && saveable.length) return saveable;
+  if (!up) return [];
+  const seen = new Set(), out = [];
+  for (const c of up.changes) { const t = c.to.trim(); if (cps(t).length >= 1 && /[\u3400-\u9fff]/.test(t) && !seen.has(t)) { seen.add(t); out.push({ text: t, pinyin: "", meaning: "", sourceChunk: up.better }); } }
+  return out.length ? out : [{ text: up.better, pinyin: up.betterPinyin, meaning: "", sourceChunk: up.better }];
+}

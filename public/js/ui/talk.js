@@ -3,6 +3,7 @@
 import { $, esc, formatPinyin, announce, fmtTime } from "./dom.js";
 import { createHearMine } from "../hear-mine.js";
 import { defaultTopic } from "../api-talk.js";
+import * as apiTalk from "../api-talk.js";
 
 const STAGE = { opening: "The coach is thinking of a question…", uploading: "Uploading your turn…", transcribing: "Writing down what you said…", assessing: "Listening…", coaching: "The coach is thinking of a reply…" };
 
@@ -60,8 +61,8 @@ export function initTalkUI(T, S, { onLeave, onSave = () => Promise.resolve(false
         blocked: () => T.state === "listening" || T.state === "processing" || T.state === "finishing" || T.coachPlaying,
       });
     } else {
-      li.innerHTML = `<div class="who">Coach</div><p class="turn-text" lang="zh-CN"></p><p class="turn-py" hidden></p><div class="turn-tip" hidden></div><div class="turn-actions"><button type="button" class="chip replay" hidden>\u{1F50A} Hear again</button></div>`;
-      row.text = li.querySelector(".turn-text"); row.py = li.querySelector(".turn-py"); row.tip = li.querySelector(".turn-tip"); row.replay = li.querySelector(".replay");
+      li.innerHTML = `<div class="who">Coach</div><p class="turn-text" lang="zh-CN"></p><p class="turn-py" hidden></p><div class="turn-tip" hidden></div><div class="turn-up" hidden></div><div class="turn-actions"><button type="button" class="chip replay" hidden>\u{1F50A} Hear again</button></div>`;
+      row.text = li.querySelector(".turn-text"); row.py = li.querySelector(".turn-py"); row.tip = li.querySelector(".turn-tip"); row.up = li.querySelector(".turn-up"); row.srcOpen = false; row.replay = li.querySelector(".replay");
       row.replay.addEventListener("click", () => T.replay(row.turn.id));
     }
     return row;
@@ -69,9 +70,9 @@ export function initTalkUI(T, S, { onLeave, onSave = () => Promise.resolve(false
   /** Wording tip + suggested words under a coach reply. About WORDS/grammar from the transcript text, never about sound. Save word is manual only. */
   function tipHtml(t) {
     const c = t.correction, sug = t.suggested || [];
-    if (!t.tipText && !c && !sug.length) return "";
+    if ((!t.tipText && !c || t.upgrade) && !sug.length) return "";
     let h = "";
-    if (t.tipText || c) {
+    if ((t.tipText || c) && !t.upgrade) {   // with an upgrade card the comparison below says the same thing, better
       h += `<div class="tip-h">Wording tip <span class="muted">(about your words, not your pronunciation)</span></div>`;
       if (c && c.quote) h += `<p class="tip-line">You said <q lang="zh-CN">${esc(c.quote)}</q></p>`;
       if (c) h += `<p class="tip-line">Try: <b lang="zh-CN">${esc(c.betterZh)}</b>${pinyinOn && c.pinyin ? ` <span class="py">${esc(formatPinyin(c.pinyin))}</span>` : ""}</p>`;
@@ -80,7 +81,41 @@ export function initTalkUI(T, S, { onLeave, onSave = () => Promise.resolve(false
     if (sug.length) h += `<div class="tip-h">Words you could save</div><ul class="talk-words">${sug.map((w, i) => `<li class="sw"><span class="w" lang="zh-CN">${esc(w.text)}</span>${w.pinyin ? `<span class="py">${esc(formatPinyin(w.pinyin))}</span>` : ""}${w.meaning ? `<span class="why">${esc(w.meaning)}</span>` : ""}<button type="button" class="btn ghost small js-save-sug" data-i="${i}" aria-label="Save word ${esc(w.text)}"${saved.has(w.text) ? " disabled" : ""}>${saved.has(w.text) ? "Saved \u2713" : "Save word"}</button></li>`).join("")}</ul>`;
     return h;
   }
+  /** "What you said / Could have said" card (done.upgrade). Changed phrases are marked by more than colour: <del> (strikethrough) + underline on
+   *  what you said, <ins> (bold underline) on the better version, plus a text legend for screen readers. About wording only, never sound. */
+  const segHtml = (segs, tag) => segs.map((g) => (g.mark ? `<${tag} class="up-m">${esc(g.text)}</${tag}>` : esc(g.text))).join("");
+  function upHtml(t, row) {
+    const u = t.upgrade, note = apiTalk.upgradeNoteOf(t.upgradeStatus, t.onTopic);
+    if (!u) return note ? `<p class="up-note muted">${esc(note)}</p>` : "";
+    const busy = ["listening", "processing", "finishing"].includes(T.state);
+    const mine = T.betterTurnId === t.id, ph = mine ? T.betterPhase : "idle";
+    const hearLabel = ph === "loading" ? "Loading\u2026" : ph === "playing" ? "\u25A0 Stop" : ph === "error" ? "\u{1F50A} Tap to retry" : "\u{1F50A} Hear better version";
+    const saves = apiTalk.phrasesToSave(u, t.saveable);
+    let h = `<div class="up-h">Could have said <span class="muted">(about your words, not your pronunciation)</span></div>`;
+    h += `<div class="up-line up-said"><span class="up-lbl">What you said</span><p lang="zh-CN">${segHtml(u.saidSegs, "del")}</p></div>`;
+    h += `<div class="up-line up-better"><span class="up-lbl">Could have said</span><p lang="zh-CN">${segHtml(u.betterSegs, "ins")}</p>${pinyinOn && u.betterPinyin ? `<p class="py up-py">${esc(formatPinyin(u.betterPinyin))}</p>` : ""}</div>`;
+    const ch = u.changes.filter((c) => c.from || c.to);
+    if (ch.length) h += `<ul class="up-changes">${ch.map((c) => `<li><span class="sr-only">Changed: </span>${c.from ? `<del lang="zh-CN">${esc(c.from)}</del>` : "<span class=\"muted\">(added)</span>"} \u2192 ${c.to ? `<ins lang="zh-CN">${esc(c.to)}</ins>` : "<span class=\"muted\">(left out)</span>"}${c.note ? ` <span class="muted">${esc(c.note)}</span>` : ""}</li>`).join("")}</ul>`;
+    h += `<div class="row gap wrap up-actions"><button type="button" class="chip js-up-hear" ${busy || ph === "loading" ? "disabled" : ""} aria-pressed="${ph === "playing"}">${hearLabel}</button>`;
+    if (u.sourceLines.length) h += `<button type="button" class="chip js-up-src" aria-expanded="${row.srcOpen}">${row.srcOpen ? "Hide script line" : "Show script line"}</button>`;
+    h += saves.map((p, i) => { const done = saved.has(p.text); return `<button type="button" class="chip js-up-save" data-i="${i}" ${done ? "disabled" : ""}>${done ? "\u2713 Saved" : `Save phrase${saves.length > 1 || p.text !== u.better ? ` <span lang="zh-CN">${esc(p.text)}</span>` : ""}`}</button>`; }).join("");
+    h += `</div>`;
+    if (note) h += `<p class="up-note muted">${esc(note)}</p>`;
+    if (u.sourceLines.length && row.srcOpen) h += `<div class="up-src"><div class="up-lbl">From your script</div>${u.sourceLines.map((l) => `<p lang="zh-CN">${esc(l.text)}</p>`).join("")}</div>`;
+    return h;
+  }
   chat.addEventListener("click", (e) => {
+    const ub = e.target.closest(".js-up-hear, .js-up-src, .js-up-save");
+    if (ub) {
+      const row = rows.get(ub.closest("li.turn").dataset.id); if (!row || !row.turn.upgrade) return;   // buttons exist only on an 'ok' upgrade card
+      if (ub.classList.contains("js-up-hear")) { T.hearBetter(row.turn.id); return; }   // synchronous call inside the tap: the player primes <audio> here
+      if (ub.classList.contains("js-up-src")) { row.srcOpen = !row.srcOpen; render(); return; }
+      const p = apiTalk.phrasesToSave(row.turn.upgrade, row.turn.saveable)[+ub.dataset.i]; if (!p || saved.has(p.text)) return;
+      ub.disabled = true; ub.textContent = "Saving\u2026";
+      Promise.resolve(onSave({ text: p.text, pinyin: p.pinyin || "", meaning: p.meaning || "", sourceChunk: p.sourceChunk }))
+        .then((ok) => { if (ok) { saved.add(p.text); announce(`Saved ${p.text} to Words to practise.`); } else announce("Couldn't save that phrase. Try again."); row.upSig = ""; render(); }, () => { row.upSig = ""; render(); });
+      return;
+    }
     const b = e.target.closest(".js-save-sug"); if (!b) return;
     const row = rows.get(b.closest("li.turn").dataset.id), w = row && row.turn.suggested && row.turn.suggested[+b.dataset.i];
     if (!w || saved.has(w.text)) return;
@@ -108,6 +143,8 @@ export function initTalkUI(T, S, { onLeave, onSave = () => Promise.resolve(false
       row.py.classList.toggle("muted", !py);
       const html = tipHtml(t);
       row.tip.hidden = !html; if (row.tipSig !== html) { row.tipSig = html; row.tip.innerHTML = html; }
+      const uh = upHtml(t, row);
+      row.up.hidden = !uh; if (row.upSig !== uh) { row.upSig = uh; row.up.innerHTML = uh; }
     }
   }
   function syncChat() {

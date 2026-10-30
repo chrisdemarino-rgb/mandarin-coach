@@ -478,3 +478,17 @@ body[data-view="talk"] #view-practice { display: none; }
 .talk-list .py, .talk-words .py, .turn-tip .py { font-size: 15px; color: var(--muted); }
 /* Free talk topic is a text field, not a dropdown: no select arrow */
 input.talk-topic { background-image: none; padding-right: 12px; }
+/* Free talk: "What you said / Could have said" card. Changes are marked by strikethrough/underline and bold, not colour alone. */
+.turn-up { margin-top: 10px; padding: 10px 12px; border-radius: 12px; background: var(--card-alt, #f4f6fb); border: 1px solid var(--line, #d8dce6); }
+.turn-up .up-h { font-weight: 700; margin-bottom: 6px; }
+.turn-up .up-line { margin: 6px 0; }
+.turn-up .up-line p { margin: 2px 0; font-size: 20px; line-height: 1.5; }
+.turn-up .up-lbl { display: block; font-size: 13px; font-weight: 600; color: var(--muted, #5b6170); text-transform: none; }
+.turn-up del.up-m, .turn-up .up-changes del { text-decoration: line-through underline; text-decoration-thickness: 2px; background: #fde8e8; color: inherit; }
+.turn-up ins.up-m, .turn-up .up-changes ins { text-decoration: underline; text-decoration-thickness: 3px; font-weight: 700; background: #e3f5e8; color: inherit; }
+.turn-up .up-changes { margin: 6px 0; padding-left: 18px; font-size: 16px; }
+.turn-up .up-py { font-size: 15px; color: var(--muted, #5b6170); }
+.turn-up .up-actions { margin-top: 8px; }
+.turn-up .up-src { margin-top: 8px; padding: 8px 10px; border-left: 3px solid var(--line, #c9cfdb); }
+.turn-up .up-src p { margin: 2px 0; font-size: 17px; }
+.count.over { color: var(--bad, #b42318); }

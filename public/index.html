@@ -48,10 +48,11 @@
       <div class="card">
         <label class="label" for="scriptInput">Your Chinese script</label>
         <textarea id="scriptInput" rows="9" lang="zh-CN" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off"
-          placeholder="Paste your full script here (1000+ characters). Use [停顿] for a pause and [强调] before words to stress."></textarea>
+          placeholder="Paste your full script here (1000 to 3000 characters). Use [停顿] for a pause and [强调] before words to stress."></textarea>
         <div class="row between">
           <span id="charCount" class="count" aria-live="polite">0 characters</span>
           <span id="charWarn" class="warn" hidden>Under 1000 characters. You can still practise.</span>
+          <span id="charOver" class="warn over" role="alert" hidden></span>
         </div>
         <div class="row gap wrap">
           <button id="btnSample" class="btn" type="button">Load sample script</button>

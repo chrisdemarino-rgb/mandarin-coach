@@ -32,7 +32,7 @@ def run(viewport, tag, b):
     mobile = viewport["width"] < 600
     ctx = b.new_context(viewport=viewport, permissions=["microphone"], device_scale_factor=2 if mobile else 1, has_touch=mobile, is_mobile=mobile)
     def fake(**kw): ctx.request.post(FAKE, data=kw)
-    fake(llmFail=False, transcript="我周末去公园玩了，天气很好。", talkCorrect=True)
+    fake(llmFail=False, transcript="我周末去公园玩了，天气很好。", talkCorrect=True, talkUpgrade="null")   # no script upgrade here: the wording tip path (the upgrade card is covered by e2e_talk_upgrade_real.py)
     p = ctx.new_page(); errors, talk_resp, uploads = [], [], []
     p.on("pageerror", lambda e: errors.append(str(e)))
     p.on("response", lambda r: talk_resp.append((r.url.split("/api/")[1].split("?")[0], r.status)) if "/api/talk/" in r.url or "/api/prefs" in r.url else None)

@@ -1,3 +1,4 @@
+import { scriptLimitInfo, SCRIPT_MAX } from "./limits.js";
 // App wiring: login -> session (shared/script.js + real audio.js + /api/*) -> one idempotent render().
 import { createSession } from "./session.js";
 import * as api from "./api.js";
@@ -87,8 +88,12 @@ const input = $("#scriptInput");
 let parseTimer;
 function updateCount() {
   const n = countScriptChars(input.value);
-  $("#charCount").textContent = `${n.toLocaleString()} character${n === 1 ? "" : "s"}`;
-  $("#charWarn").hidden = n === 0 || n >= 1000;
+  const li = scriptLimitInfo(n);
+  $("#charCount").textContent = li.label;
+  $("#charCount").classList.toggle("over", li.over);
+  $("#charWarn").hidden = !li.under;
+  $("#charOver").hidden = !li.over;
+  $("#charOver").textContent = li.over ? `Over the ${SCRIPT_MAX.toLocaleString("en-US")}-character limit by ${li.overBy.toLocaleString("en-US")}. Please shorten it: the coach may not accept a longer script.` : "";
 }
 function onScriptChanged(immediate) {
   updateCount();

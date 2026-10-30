@@ -6,6 +6,7 @@
 // except a failed turn's retry (same attemptId).
 // States: idle | ready (your turn) | listening | processing | paused | finishing (summary request) | finished.
 import * as apiTalk from "./api-talk.js";
+import * as player from "./tts-player.js";
 import { audio, ensureInit, startAudioFromTap, micError, MicError, RECORDING_PROBLEMS } from "./audio-io.js";
 
 const MAX_TAKES = 12;   // newest user takes kept for "Hear my recording"; older ones are dropped (their button disappears)
@@ -16,7 +17,7 @@ export function createTalk(S) {
   const subs = new Set();
   const T = {
     state: "idle", turns: [], topic: "", error: null, notice: "", statusStage: "", micArmed: false, recStart: 0, unsupported: false,
-    vocab: [], summary: null, summaryState: "idle", summaryError: "", coachPlaying: false, playingTurnId: "", turnCount: 0,
+    vocab: [], summary: null, summaryState: "idle", summaryError: "", coachPlaying: false, playingTurnId: "", turnCount: 0, betterTurnId: "", betterPhase: "idle",
     subscribe(fn) { subs.add(fn); return () => subs.delete(fn); },
     emit() { subs.forEach((fn) => { try { fn(T); } catch (e) { console.error(e); } }); },
     get active() { return !["idle", "finished"].includes(T.state); },
@@ -27,7 +28,7 @@ export function createTalk(S) {
   let run = 0, ac = null, coachChain = Promise.resolve(), discarding = Promise.resolve();
   const alive = (r) => r === run;
   const abortFlow = () => { run++; if (ac) { ac.abort(); ac = null; } coachChain = Promise.resolve(); };
-  const stopAudio = () => { try { audio.stop(); } catch { /* ignore */ } T.coachPlaying = false; T.playingTurnId = ""; };
+  const stopAudio = () => { try { audio.stop(); } catch { /* ignore */ } T.coachPlaying = false; T.playingTurnId = ""; if (T.betterPhase !== "error") T.betterPhase = "idle"; };
   const settings = () => S.store.settings;
   async function discardTake() {
     if (audio.getState() === "recording") { try { await audio.stopRecording(); } catch { /* not recording */ } }
@@ -48,6 +49,7 @@ export function createTalk(S) {
     T.state = "processing"; T.statusStage = "opening"; T.emit();   // arming the mic + the coach's opening
     const r = run;
     T.vocab = apiTalk.scriptVocabOf(S.store.script && S.store.script.text);
+    T.script = apiTalk.scriptForTalk(S.store.script && S.store.script.text); T.scriptTooLong = apiTalk.scriptTooLongForTalk(S.store.script && S.store.script.text);
     const armed = startAudioFromTap().then(() => { T.micArmed = true; });
     try { await armed; }
     catch (e) { if (!alive(r)) return; T.micArmed = false; const me = e instanceof MicError ? e : micError(e); T.state = "ready"; T.statusStage = ""; T.error = { kind: "mic", action: "resume", message: me.message, canSkip: false }; T.emit(); return; }
@@ -58,17 +60,19 @@ export function createTalk(S) {
   async function opening(r) {
     ac = new AbortController(); T.state = "processing"; T.statusStage = "opening"; T.emit();
     try {
-      const o = await apiTalk.talk.opening({ topic: T.topic, scriptVocab: T.vocab, voice: settings().voice, speed: settings().speed, signal: ac.signal });
+      const o = await apiTalk.talk.opening({ topic: T.topic, scriptVocab: T.vocab, script: T.script, voice: settings().voice, speed: settings().speed, signal: ac.signal });
       if (!alive(r)) return;
       T.statusStage = "";
       if (!o.textZh) throw new Error("empty opening");
       const coach = { id: newId("c"), role: "coach", text: o.textZh, pinyin: o.pinyin, lines: [{ text: o.textZh, pinyin: o.pinyin, role: "opening" }], tipText: "", correction: null, suggested: [], status: "ok", audio: [] };
       T.turns.push(coach);
       if (o.audioUrl) { coach.audio[0] = { url: o.audioUrl, text: o.textZh }; queueCoachAudio(r, coach, o.audioUrl); }
-      T.state = "ready"; T.emit();
+      T.scriptUsed = !!o.scriptUsed;
+      T.state = "ready"; if (T.scriptTooLong) T.notice = "Your script is over 3,000 characters, so the coach isn't using it. Shorten it on the Script tab for script-based coaching."; T.emit();
     } catch (e) {
       if (!alive(r) || (e && e.name === "AbortError")) return;
       T.statusStage = "";
+      if (e && (e.code === "script_too_long" || e.code === "invalid_context")) { T.state = "ready"; T.notice = apiTalk.talkErrorOf(e).message.replace(/^No assessment obtained: /, ""); T.emit(); return; }
       if (apiTalk.isUnsupported(e)) { T.unsupported = true; T.state = "finished"; releaseMic(); T.emit(); return; }
       T.state = "ready"; T.notice = "The coach couldn't start the conversation. Tap Record and start talking about the topic."; T.emit();
     }
@@ -127,7 +131,7 @@ export function createTalk(S) {
     try { audio.markProcessing(); } catch { /* ignore */ }
     try {
       await apiTalk.talk.turn({
-        blob: turn.take.blob, mime: turn.take.mime, topic: T.topic, history, scriptVocab: T.vocab, attemptId: turn.attemptId, voice: settings().voice, speed: settings().speed, signal: ac.signal,
+        blob: turn.take.blob, mime: turn.take.mime, topic: T.topic, history, scriptVocab: T.vocab, script: T.script, attemptId: turn.attemptId, voice: settings().voice, speed: settings().speed, signal: ac.signal,
         onEvent: (name, data) => {
           if (!alive(r)) return;
           const ev = apiTalk.readEvent(name, data);
@@ -161,7 +165,7 @@ export function createTalk(S) {
       const reply = doneEv.coachText || [doneEv.replyZh, doneEv.questionZh].filter(Boolean).join("");
       if (reply && !(coach && coach.text) && !doneEv.gate) { coachTurn(); coach.lines = [{ text: reply, pinyin: doneEv.coachPinyin || [doneEv.replyPinyin, doneEv.questionPinyin].filter(Boolean).join(" "), role: "reply" }]; syncCoach(); }
       else if (coach && !coach.pinyin && (doneEv.replyPinyin || doneEv.questionPinyin)) coach.pinyin = [doneEv.replyPinyin, doneEv.questionPinyin].filter(Boolean).join(" ");
-      if (coach && !doneEv.gate) { coach.correction = doneEv.correction; coach.suggested = doneEv.suggested; }
+      if (coach && !doneEv.gate) { coach.correction = doneEv.correction; coach.suggested = doneEv.suggested; coach.upgrade = doneEv.upgrade || null; coach.upgradeStatus = doneEv.upgradeStatus || "none"; coach.onTopic = doneEv.onTopic === undefined ? null : doneEv.onTopic; coach.saveable = doneEv.saveable || []; }
     }
     const realErr = terminalError && terminalError.code && !["no_speech_detected", "no_speech", "gated"].includes(terminalError.code);
     if (realErr && !turn.text && !doneEv) {   // e.g. transcription failed: the take is still good, so keep it and offer Try again / Skip (same attemptId)
@@ -223,6 +227,30 @@ export function createTalk(S) {
     for (const c of turn.audio) { if (!c || !alive(r)) break; try { await audio.play(c.url); } catch { break; } }
     if (alive(r)) { T.coachPlaying = false; T.playingTurnId = ""; T.emit(); }
   };
+  /** "Hear better version": POST /api/tts {text: better} through the shared <audio> (tts-player.js), primed inside the tap like Hear answer.
+   *  Must be called synchronously from the tap handler (no await before player.speak). Never while recording/processing; Stop toggle. */
+  let ttsOff = false;
+  T.hearBetter = async (turnId) => {
+    if (["listening", "processing", "finishing"].includes(T.state)) return;
+    const turn = T.turns.find((t) => t.id === turnId); const text = turn && turn.upgrade && turn.upgrade.better; if (!text) return;
+    if (T.betterTurnId === turnId && T.betterPhase === "loading") return;
+    if (T.betterTurnId === turnId && T.betterPhase === "playing") { run++; coachChain = Promise.resolve(); stopAudio(); T.betterPhase = "idle"; T.emit(); return; }
+    if (ttsOff) { T.notice = "The coach voice isn't set up on the server yet. Read the better version instead."; T.emit(); return; }
+    const r = ++run; coachChain = Promise.resolve(); stopAudio(); T.notice = "";
+    T.betterTurnId = turnId; T.betterPhase = "loading";
+    const setPhase = (ph) => { if (!alive(r)) return; T.betterPhase = ph; T.coachPlaying = ph === "playing"; T.playingTurnId = ph === "playing" ? turnId + ":better" : ""; T.emit(); };
+    try {
+      const p = player.speak(text, { voice: settings().voice, speed: settings().speed, isAlive: () => alive(r), onPhase: setPhase });   // primes in the tap
+      T.emit(); await p;
+      if (alive(r)) { T.betterPhase = "idle"; T.coachPlaying = false; T.playingTurnId = ""; }
+    } catch (e) {
+      if (!alive(r) || (e && e.name === "AbortError")) return;
+      T.coachPlaying = false; T.playingTurnId = "";
+      if (e && e.kind === "not_configured") { ttsOff = true; T.betterPhase = "idle"; T.notice = "The coach voice isn't set up on the server yet. Read the better version instead."; }
+      else { T.betterPhase = "error"; T.notice = "Couldn't play the better version. Tap \u201CTap to retry\u201D to hear it."; }
+    }
+    if (alive(r) || T.betterTurnId === turnId) T.emit();
+  };
   /** "Skip reply": stop the coach talking and go straight to your turn. */
   T.skipReply = () => { if (!T.coachPlaying) return; T.stopCoach(); };
 
@@ -248,14 +276,14 @@ export function createTalk(S) {
     abortFlow(); const r = run; ac = new AbortController();
     T.state = "finishing"; T.summaryState = "loading"; T.summaryError = ""; T.emit();
     try {
-      const s = await apiTalk.talk.summary({ topic: T.topic, turns: T.turns, scriptVocab: T.vocab, signal: ac.signal });
+      const s = await apiTalk.talk.summary({ topic: T.topic, turns: T.turns, scriptVocab: T.vocab, script: T.script, signal: ac.signal });
       if (!alive(r)) return;
       T.summary = s; T.summaryState = s.status === "ok" ? "ok" : "empty";
     } catch (e) {
       if (!alive(r) || (e && e.name === "AbortError")) return;
       T.summary = null;
       if (apiTalk.isUnsupported(e)) T.summaryState = "unsupported";
-      else { T.summaryState = "error"; T.summaryError = e.message || "Couldn't get the summary."; }
+      else { T.summaryState = "error"; T.summaryError = e && (e.code === "script_too_long" || e.code === "invalid_context") ? apiTalk.talkErrorOf(e).message.replace(/^No assessment obtained: /, "") : e.message || "Couldn't get the summary."; }
     }
     T.state = "finished"; T.emit();
   };

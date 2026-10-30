@@ -60,7 +60,17 @@ http.createServer(async (req, res) => {
     const sys = j.messages?.[0]?.content || "";
     let content;
     if (/^TALK_OPEN/.test(sys)) { let u = {}; try { u = JSON.parse(j.messages[1].content); } catch { /* ignore */ } content = JSON.stringify({ textZh: `你好！我们聊聊${String(u.topic || "生活").slice(0, 12)}吧，你最近怎么样？` }); }
-    else if (/^TALK_REPLY/.test(sys)) { let u = {}; try { u = JSON.parse(j.messages[1].content); } catch { /* ignore */ } content = JSON.stringify({ replyZh: "听起来很不错！", questionZh: ctl.talkQuestion || "你还做了什么有意思的事情？" }); }
+    else if (/^TALK_REPLY/.test(sys)) { let u = {}; try { u = JSON.parse(j.messages[1].content); } catch { /* ignore */ } content = JSON.stringify({ replyZh: "听起来很不错！", questionZh: ctl.talkQuestion || "你还做了什么有意思的事情？", ...(/SCRIPT MODE/.test(sys) ? { onTopic: ctl.talkOnTopic !== false } : {}) }); }
+    else if (/^TALK_UPGRADE/.test(sys)) {   // backend 72c25bd upgrade call. ctl.talkUpgrade: "ok" (default) | "null" | "ungrounded" | "fail"; ctl.talkUpgradeMs delays it
+      let u = {}; try { u = JSON.parse(j.messages[1].content); } catch { /* ignore */ }
+      if (ctl.talkUpgradeMs) await new Promise((r) => setTimeout(r, +ctl.talkUpgradeMs));
+      const said = String(u.learnerText || ""), script = String(u.script || ""), mode = ctl.talkUpgrade || "ok";
+      const line = (script.match(/[^。！？\n]*周末的时候[^。！？\n]*[。！？]/) || [""])[0];
+      if (mode === "fail") content = "not json {";
+      else if (mode === "null" || !line || !said.includes("我周末")) content = JSON.stringify({ upgrade: null });
+      else if (mode === "ungrounded") content = JSON.stringify({ upgrade: { said, better: said.replace("玩了", "跳舞唱歌弹钢琴"), changes: [{ from: "玩了", to: "跳舞唱歌弹钢琴", kind: "word_choice" }], sourceLines: [line] } });
+      else content = JSON.stringify({ upgrade: { said, better: said.replace("我周末", "周末的时候，我"), changes: [{ from: "我周末", to: "周末的时候", kind: "word_choice", note: "Script wording." }], sourceLines: [line] } });
+    }
     else if (/^TALK_FIND/.test(sys)) { let u = {}; try { u = JSON.parse(j.messages[1].content); } catch { /* ignore */ } const t = String(u.learnerText || ""); content = JSON.stringify(t.includes("玩了") && ctl.talkCorrect !== false ? { correction: { kind: "word_choice", quote: "玩了", betterZh: "逛了", explainZh: "这里换个词更自然。", confidence: "high" }, vocabHints: [], natural: false } : { correction: null, vocabHints: [], natural: true }); }
     else if (/^TALK_SUMMARY/.test(sys)) content = JSON.stringify({ takeaways: [{ textEn: "You described your weekend clearly.", textZh: "我周末去了公园。" }, { textEn: "You joined two ideas together.", textZh: "天气很好，所以我去了。" }, { textEn: "You kept the conversation going.", textZh: "我们聊得很开心。" }], newWords: [{ text: "爬山", meaning: "to go hiking", exampleZh: "周末我们去爬山。" }, { text: "逛公园", meaning: "to stroll in a park", exampleZh: "我喜欢逛公园。" }], phrasesToTry: [{ zh: "我觉得很放松。", en: "I feel very relaxed.", whyEn: "A natural way to say how you feel." }, { zh: "天气真好。", en: "The weather is great.", whyEn: "A common weather remark." }, { zh: "下次一起去吧。", en: "Let's go together next time.", whyEn: "A friendly invitation." }], strengths: ["You spoke in full sentences."] });
     else if (/ONE spoken comprehension question/.test(sys)) { let u = {}; try { u = JSON.parse(j.messages[1].content); } catch { /* ignore */ } content = JSON.stringify(qaQuestionJson(u)); }
